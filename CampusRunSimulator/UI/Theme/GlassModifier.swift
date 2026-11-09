@@ -86,15 +86,14 @@ private struct MaterialGlassCard<Content: View>: View {
     var body: some View {
         content()
             .padding(role.spacing)
-            .background(
+            .background(in: RoundedRectangle(cornerRadius: role.cornerRadius, style: .continuous)) {
                 RoundedRectangle(cornerRadius: role.cornerRadius, style: .continuous)
                     .fill(.regularMaterial)
                     .overlay(
                         RoundedRectangle(cornerRadius: role.cornerRadius, style: .continuous)
                             .strokeBorder(strokeColor, lineWidth: 1)
-                    ),
-                in: RoundedRectangle(cornerRadius: role.cornerRadius, style: .continuous)
-            )
+                    )
+            }
             .shadow(
                 color: shadowColor,
                 radius: interactive ? 8 : 6,
