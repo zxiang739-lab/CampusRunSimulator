@@ -155,6 +155,15 @@ public struct CampusRunSimulatorApp: App {
 
     public var body: some Scene {
         WindowGroup {
+            #if CAMPUSRUN_TEST_HOST
+            // 仅测试编译条件（CI 单元测试步骤传入 CAMPUSRUN_TEST_HOST）：
+            // 快速启动路径，跳过完整 7 页 UI，避免 XCTest 宿主与 runner 连接超时。
+            // archive / IPA 不定义该条件，仍走下方完整 UI 路径；@testable import 不受影响。
+            Group {
+                Text("TestHost")
+                    .accessibilityIdentifier("testHost")
+            }
+            #else
             Group {
                 if let stores {
                     RootView()
@@ -169,6 +178,7 @@ public struct CampusRunSimulatorApp: App {
                 }
             }
             .id(reloadCount)
+            #endif
         }
     }
 

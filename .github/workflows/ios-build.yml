@@ -63,7 +63,6 @@ env:
   SCHEME: CampusRunSimulator
   UNSIGNED_IPA: build/CampusRunSimulator-unsigned.ipa
   ARTIFACT_NAME: CampusRunSimulator-unsigned-ipa
-  DESTINATION: 'platform=iOS Simulator,name=iPhone 16'
 
 jobs:
   # ===================== 路径 A：默认，未签名 IPA =====================
@@ -182,16 +181,45 @@ jobs:
             CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION}" \
             clean build 2>&1 | tee build/xcodebuild_build.log
 
+      - name: 预热 iOS 模拟器并解析 UDID
+        id: sim
+        run: |
+          set -euo pipefail
+          echo "── 可用模拟器 ──"
+          xcrun simctl list devices available | sed -n '1,80p'
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json,sys
+          d=json.load(sys.stdin)["devices"]
+          cands=[v for k,vs in d.items() if "iOS" in k for v in vs if v["name"]=="iPhone 16" and v.get("isAvailable",True)]
+          if not cands:
+              cands=[v for k,vs in d.items() if "iOS" in k for v in vs if v.get("isAvailable",True)]
+          print(cands[0]["udid"])')
+          echo "SIM_UDID=${UDID}" >> "$GITHUB_OUTPUT"
+          echo "选中模拟器: ${UDID}"
+          # 预热：先 boot，再用 bootstatus -b 阻塞到启动完成，显著缩短 iOS 26 首次 XCTest 连接时间。
+          xcrun simctl boot "${UDID}" 2>/dev/null || true
+          xcrun simctl bootstatus "${UDID}" -b
+          xcrun simctl list devices | grep -i booted || true
+
       - name: 单元测试（F60–F64，纯逻辑 + in-memory SwiftData）
         run: |
           set -euo pipefail
+          # 用具体 UDID（预热过的模拟器）+ 稳健超时/关闭并行，避免 test runner 连接超时。
+          # SWIFT_ACTIVE_COMPILATION_CONDITIONS 仅对本次 test 生效，启用 TEST_HOST 快速启动路径，不影响 archive/IPA。
           xcodebuild test \
             -project "${PROJECT}" \
             -scheme "${SCHEME}" \
             -configuration Debug \
-            -destination "${DESTINATION}" \
+            -destination "id=${{ steps.sim.outputs.SIM_UDID }}" \
             -only-testing:CampusRunSimulatorTests \
             -resultBundlePath build/TestResults.xcresult \
+            -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 900 \
+            -maximum-test-execution-time-allowance 1800 \
+            -destination-timeout 300 \
+            -derivedDataPath build/DerivedData \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) CAMPUSRUN_TEST_HOST' \
             CODE_SIGNING_ALLOWED=NO \
             MARKETING_VERSION="${MARKETING_VERSION}" \
             CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION}" \
@@ -205,9 +233,10 @@ jobs:
             -project "${PROJECT}" \
             -scheme "${SCHEME}" \
             -configuration Debug \
-            -destination "${DESTINATION}" \
+            -destination "id=${{ steps.sim.outputs.SIM_UDID }}" \
             -only-testing:CampusRunSimulatorUITests \
             -resultBundlePath build/UITestResults.xcresult \
+            -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             MARKETING_VERSION="${MARKETING_VERSION}" \
             CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION}" \
@@ -254,7 +283,13 @@ jobs:
           cat build/xcodebuild_test.log 2>/dev/null || true
           echo "===== xcresult 摘要（Xcode 16+ 语法，旧版本忽略）====="
           xcrun xcresulttool get test-results summary --path build/TestResults.xcresult 2>/dev/null || true
+          echo "===== xcresult 具体失败用例（tests）====="
+          xcrun xcresulttool get test-results tests --path build/TestResults.xcresult 2>/dev/null | head -200 || true
+          echo "===== xcresult insights ====="
+          xcrun xcresulttool get test-results insights --path build/TestResults.xcresult 2>/dev/null | head -100 || true
           ls -laR build/TestResults.xcresult 2>/dev/null || true
+          echo "===== xcodebuild test 日志末尾 200 行 ====="
+          tail -200 build/xcodebuild_test.log || true
           echo "===== F70 / archive 日志 ====="
           cat build/unsigned_ipa.log 2>/dev/null || true
           cat build/xcodebuild_archive.log 2>/dev/null || true
