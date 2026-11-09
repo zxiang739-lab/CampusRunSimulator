@@ -528,9 +528,15 @@ public final class AppServices {
         }
         context.insert(try SDMapper.fromValue(state))
         try context.save()
-        // 与 RootView 的 @AppStorage 键保持一致，并广播真实状态变化。
-        UserDefaults.standard.set(state.hasDegradedPermission, forKey: AppPreferenceKey.permissionDegraded)
-        NotificationCenter.default.post(name: .campusRunPermissionStateChanged, object: nil)
+        // 与 RootView 的 @AppStorage 键保持一致。
+        // **只在降级状态真正变化时才广播**：否则 onReceive → savePermissionState → post 会形成
+        // 无限通知循环、占满主线程（正是「UI 正常但滑不动/点不了」的根因）。
+        let previous = UserDefaults.standard.bool(forKey: AppPreferenceKey.permissionDegraded)
+        let current = state.hasDegradedPermission
+        UserDefaults.standard.set(current, forKey: AppPreferenceKey.permissionDegraded)
+        if previous != current {
+            NotificationCenter.default.post(name: .campusRunPermissionStateChanged, object: nil)
+        }
     }
 
     public func loadPermissionState() -> PermissionState {

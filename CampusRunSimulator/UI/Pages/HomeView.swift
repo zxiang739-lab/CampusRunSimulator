@@ -101,11 +101,14 @@ public final class HomeViewModel {
     }
 
     /// 重新自检权限（前台回到应用后调用）。
+    ///
+    /// **绝不能在这里写库/发通知**：本方法由 `.onReceive(.campusRunPermissionStateChanged)` 触发，
+    /// 而 `savePermissionState` 会再发同一个通知，二者叠加会形成无限通知循环、占满主线程，
+    /// 表现为「UI 正常渲染但整体滑不动、点不了」。这里只刷新内存中的展示状态即可。
     public func recheckPermissions() {
         let snapshot = locationProvider.authorizationSnapshot
         permissionDegraded = snapshot.hasDegradedPermission
         permissionSummary = snapshot.summary
-        try? AppServices.shared.savePermissionState(PermissionState.from(snapshot: snapshot))
     }
 }
 
