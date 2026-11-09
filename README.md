@@ -25,6 +25,56 @@
 
 ---
 
+## 0. 构建与发布状态（GitHub Actions 实测）
+
+> **本仓库由 GitHub Actions 在 macOS Runner 上真实构建通过，Release 中的 IPA 为真实产物，可下载校验。**
+>
+> 下列数据来自一次真实 `push main` 触发的完整成功 run，非本地推断、非预估。
+
+| 项目 | 实测结果 |
+| --- | --- |
+| 仓库（public） | <https://github.com/zxiang739-lab/CampusRunSimulator> |
+| Actions run | `42561578021`（触发事件 `push` → 分支 `main`） |
+| 构建工具链 | Xcode **26.3** / iOS **26.2** Simulator（macOS Runner） |
+| 编译门禁 | ✅ `xcodebuild -sdk iphonesimulator clean build` 通过 |
+| 模拟器预热 | ✅ `xcrun simctl boot` + `simctl bootstatus -b` 通过，后续步骤使用解析出的具体 UDID |
+| 单元测试 | ✅ **44 tests, 0 failures（0 unexpected）** |
+| 未签名 IPA（路径 A） | ✅ **1,351,848 字节（约 1.29 MB）**，`test -s` + `unzip -l` 双重门禁通过 |
+| IPA 内部结构 | `Payload/CampusRunSimulator.app/CampusRunSimulator`（3,436,256 字节）、`Info.plist`、`PkgInfo` |
+| artifact | ✅ 已上传 `CampusRunSimulator-unsigned-ipa`（`if-no-files-found: error`） |
+| Tag | ✅ `v0.1.0`（由 `auto-tag` job 幂等创建的轻量 tag，指向该次构建 commit） |
+| Release | ✅ <https://github.com/zxiang739-lab/CampusRunSimulator/releases/tag/v0.1.0> |
+| Release 资产 ① | `CampusRunSimulator-unsigned.ipa` — 1,351,848 字节 |
+| Release 资产 ② | `CampusRunSimulator-source.zip` — 482,410 字节 |
+| 签名状态 | **未签名 IPA（路径 A）**；路径 B（已签名）因未配置 5 个 Secrets **未执行**，属如实状态 |
+
+> **版本号机制**：Release 版本由 `Config/App.xcconfig` 的 `MARKETING_VERSION` 唯一决定，
+> `auto-tag` job 用 `awk` 从该文件解析版本并自动创建 `v<版本>` 轻量 tag，workflow 内不写死任何版本字面量。
+> 因此升级版本只需改这一个文件，编译 / IPA / tag / Release 全链路自动跟随。
+>
+> 仓库**当前工作副本已升级至 v0.1.1（build 2），尚未推送、尚未构建，待 CI 验证**；
+> 上表是 `v0.1.0` 那次 run 的历史实测结果，不代表 v0.1.1 已发布。
+
+该 run 的步骤链全部 ✓：编译门禁 → 预热模拟器 → 单元测试 → 构建未签名 IPA →
+IPA `test -s` + `unzip -l` 双重门禁 → 上传 artifact → `auto-tag` → `release`。
+
+**这套结果能证明什么**：在 Xcode 26.3 / iOS 26.2 SDK 上可编译、单元测试真实通过（44/44）、
+IPA 真实存在且非空、tag 与 Release 真实发布，产物可下载后自行校验字节数与内部结构。
+
+**这套结果不能证明什么**（以下仍需人工 / 真机执行，状态保持「待验收」）：
+
+- 后台 **30 min** 真实连续记录、GPS 遮挡后独立 segment（AC-F5 / [T07]）；
+- **HealthKit 真机**授权 + 显式勾选后写入 workout + route（AC-F6）；
+- **XCUITest 全流程**（[T11]）—— CI 中该步骤仅在 `workflow_dispatch` 且 `runUITests=true` 时开启，
+  本次 run **未执行**；
+- **签名路径 B**（已签名 IPA）—— 需 5 个 Secrets 齐备并手动触发；
+- **iOS 17 等低版本功能等价**（AC-F9）—— 本次 CI 仅运行在 **iOS 26.2 模拟器**上，低版本与真机等价性
+  需在对应系统上人工验证。
+
+完整清单见 **§10 真机验收清单**；未签名 IPA 的安装方式见 **§7**。
+
+---
+
 ## 1. 项目定位与边界
 
 | 是 | 不是 |
@@ -61,8 +111,9 @@ App **零第三方依赖**（无 Swift Package / CocoaPods / Carthage）；仅�
 | 语言 / 并发 | Swift 5，`SWIFT_STRICT_CONCURRENCY = complete` |
 | 系统框架 | SwiftUI、SwiftData、Swift Charts、MapKit、CoreLocation、CoreMotion、HealthKit、Foundation、OSLog、UIKit、XCTest / XCUITest |
 | 第三方依赖 | **无**；CI 中的 `actions/checkout@v4`、`actions/upload-artifact@v4`、`actions/download-artifact@v4`、`softprops/action-gh-release@v2` 是 GitHub Actions 编排工具，不是 App 运行依赖 |
+| CI 实测工具链 | **Xcode 26.3 / iOS 26.2 Simulator**（macOS Runner，run `42561578021`，编译 + 44 个单元测试全部通过，见 §0） |
 
-## 4. 目录结构（74 个文件，F01–F74）
+## 4. 目录结构（75 个交付文件：F01–F74 + 新增 AppIcon-1024.png）
 
 ```
 CampusRunSimulator/
@@ -73,6 +124,11 @@ CampusRunSimulator/
 │   ├── App/                              # F08 @main 入口、AppDelegate、双容器注入
 │   ├── RootView.swift                    # F09 AppRoute / TabView / 玻璃顶栏底栏
 │   ├── Resources/                        # F04–F07 Info.plist / entitlements / Assets
+│   │   └── Assets.xcassets/
+│   │       ├── Contents.json
+│   │       └── AppIcon.appiconset/
+│   │           ├── Contents.json         # 声明 filename（缺此字段会导致 actool 不产出图标）
+│   │           └── AppIcon-1024.png      # **75 号新增**：1024×1024 RGB 无 alpha 桌面图标，供 actool 生成 Assets.car
 │   ├── Core/                             # F10–F13 DataOrigin / Units / AppConstants / AuditLogger
 │   ├── Models/
 │   │   ├── Domain/                       # F14–F19 15 类领域实体
@@ -95,7 +151,7 @@ CampusRunSimulator/
 ├── ci/                                   # F69 ExportOptions.plist、F70 未签名 IPA 脚本
 │   └── scripts/
 ├── .github/workflows/ios-build.yml       # F71 CI 编译 / 测试 / 双签名路径 / Release
-├── docs/                                 # 上游 PRD / 架构 / 任务列表（不在 74 文件计数内）
+├── docs/                                 # 上游 PRD / 架构 / 任务列表（不在 75 文件计数内）
 ├── README.md / LICENSE / CHANGELOG.md    # F72–F74
 ```
 
@@ -125,7 +181,8 @@ xcodebuild test -project CampusRunSimulator.xcodeproj \
   -only-testing:CampusRunSimulatorUITests
 
 # 4) 生成未签名 IPA（签名路径 A，F70）
-MARKETING_VERSION=0.1.0 CURRENT_PROJECT_VERSION=1 \
+#    版本号与 Config/App.xcconfig 保持一致（当前 0.1.1 / build 2）
+MARKETING_VERSION=0.1.1 CURRENT_PROJECT_VERSION=2 \
   bash ci/scripts/build_unsigned_ipa.sh
 # 产物：build/CampusRunSimulator-unsigned.ipa
 # 脚本内部强制：test -s 门禁 + unzip -l | grep Payload/CampusRunSimulator.app/Info.plist
@@ -142,41 +199,71 @@ MARKETING_VERSION=0.1.0 CURRENT_PROJECT_VERSION=1 \
 
 | 触发 | 行为 |
 | --- | --- |
-| `push` 到 `main` | 编译门禁 + 单元测试 + 生成未签名 IPA + 上传 artifact；**首次成功构建后由 `auto-tag` job 幂等创建轻量 tag `v0.1.0`，并在同一次 run 内创建 GitHub Release、上传真实 IPA** |
+| `push` 到 `main` | 编译门禁 + 单元测试 + 生成未签名 IPA + 上传 artifact；**首次成功构建后由 `auto-tag` job 幂等创建轻量 tag `v<MARKETING_VERSION>`（当前 v0.1.1），并在同一次 run 内创建 GitHub Release、上传真实 IPA** |
 | `pull_request` | 编译门禁 + 单元测试 + 生成未签名 IPA + 上传 artifact（不创建 tag / Release） |
 | `push` tag `v*` | 上述全部 + 下载 IPA artifact + 打包源码 zip + 创建 GitHub Release |
 | `workflow_dispatch` | 可选 `signingMode=unsigned\|signed`、`runUITests`、`exportMethod` |
 
-> **Release 闭环机制（QA 第 1 轮修复）**：`GITHUB_TOKEN` 推送的 tag 按 GitHub 官方规定**不会**触发新的
-> workflow run，因此不能依赖「推 tag → 二次触发 release」。本 workflow 采用方案 A：`auto-tag` job
-> （`needs: [build-test]`，仅 `push` 且 `refs/heads/main` 且构建成功时运行）用 `git rev-parse -q --verify
-> refs/tags/v0.1.0` 做幂等判断；tag 不存在则 `git tag v0.1.0 "${GITHUB_SHA}"` + `git push`，输出
-> `created=true`。`release` job（`needs: [build-test, auto-tag]`）据此在**同一次 run** 内发布 Release，
+> **Release 闭环机制（QA 第 1 轮修复 + 版本编排修复）**：`GITHUB_TOKEN` 推送的 tag 按 GitHub 官方规定**不会**
+> 触发新的 workflow run，因此不能依赖「推 tag → 二次触发 release」。本 workflow 采用方案 A：`auto-tag` job
+> （`needs: [build-test]`，仅 `push` 且 `refs/heads/main` 且构建成功时运行）先从
+> `Config/App.xcconfig` 用 `awk` 解析 `MARKETING_VERSION` 得到 `TAG="v${VER}"`，再用
+> `git rev-parse -q --verify "refs/tags/${TAG}"` 做幂等判断；tag 不存在则
+> `git tag "${TAG}" "${GITHUB_SHA}"` + `git push origin "refs/tags/${TAG}"`，输出 `created=true`。
+> `release` job（`needs: [build-test, auto-tag]`）据此在**同一次 run** 内发布 Release，
 > IPA 由 `actions/download-artifact@v4` 从同一次 run 获取，保留 `test -s` + `unzip -l` 双门禁；
 > `tag_name` / `name` 用 `github.ref_name || needs.auto-tag.outputs.tag` 三元表达式，并显式传
 > `target_commitish: ${{ github.sha }}` 防止 tag 落到默认分支最新 commit。防循环：GITHUB_TOKEN 推 tag
 > 不触发新 run + `auto-tag.if` 限定 main + release 不推任何 git 对象；幂等：`created == 'true'` 才发布，
-> 避免每次 push main 重复覆盖同一 Release。**不引入任何新 Secret**（仅默认 `GITHUB_TOKEN`）。
+> 避免同一版本重复覆盖同一 Release，而**版本升级后 tag 名随之变化，会自然产生新 Release**。
+> **不引入任何新 Secret**（仅默认 `GITHUB_TOKEN`）。
 > `RELEASE_BODY` / Release name / 状态摘要统一使用 `RELEASE_TAG` 版本常量，不再用 `${GITHUB_REF_NAME}`
-> （否则 main 触发会输出 "main" 而非 "v0.1.0"）。
+> （否则 main 触发会输出 "main" 而非 `v<版本>`）。
+>
+> **为何必须动态解析**：旧实现在 `auto-tag` 里把 tag 名写死为 `v0.1.0`，该 tag 已存在 →
+> 幂等判断必然命中 → `created=false` → `release` 被跳过，新 IPA 永远进不了 Release。
+> 现版本的版本号唯一来源是 `Config/App.xcconfig`，workflow 内已无任何写死的版本字面量。
 
-**12 步完整流程（路径 A，job `build-test`，`runs-on: macos-15`）**
+**`build-test` job 的 14 个步骤（路径 A，`runs-on: macos-15`，与 `ios-build.yml` 实际结构一致）**
 
-1. `actions/checkout@v4` 检出源码；
-2. 动态选择最高可用 Xcode（`ls -d /Applications/Xcode_*.app | sort -V | tail -1`，可用仓库变量 `XCODE_VERSION` 固定）→ `sudo xcode-select -s` → `xcodebuild -version` / `xcrun simctl list devices available` 日志；
-3. `plutil -lint` 校验 `Info.plist` / `CampusRunSimulator.entitlements` / `ci/ExportOptions.plist`；
-4. 合规静态扫描：无 `URLSession` / 上传成绩栈、无 `simulated→real` 转换实现、无禁止动作标识、无硬编码证书（排除 `docs/` 与否定式免责声明）；
-5. 解析版本：tag → `MARKETING_VERSION`；`CURRENT_PROJECT_VERSION = github.run_number`（非 tag 用 `0.1.0`）；
-6. `xcodebuild -sdk iphonesimulator ... clean build` 编译门禁（不加 `-quiet`，`tee` 保留完整日志）；
-7. `xcodebuild test ... -only-testing:CampusRunSimulatorTests -resultBundlePath build/TestResults.xcresult`；
-8. 可选 `runUITests` 时运行 `CampusRunSimulatorUITests`；
-9. `bash ci/scripts/build_unsigned_ipa.sh` 生成未签名 IPA；
-10. `test -s` + `unzip -l | grep Payload/CampusRunSimulator.app/Info.plist` 双重门禁，失败即 `exit 1`；
-11. `actions/upload-artifact@v4` 上传 IPA（`if-no-files-found: error`）；`if: failure()` 步骤 `cat` 全部日志；
-12. `auto-tag` job（仅 `push main` 且构建成功）幂等创建 `v0.1.0` 轻量 tag；`release` job（tag `v*` 或
-    本次 run 首次 auto-tag 成功）在同一次 run 内下载 IPA artifact → 打包源码 zip → 拼接 CHANGELOG
-    生成 Release 说明 → `softprops/action-gh-release@v2` 发布（IPA + 源码 zip，`generate_release_notes: true`、
-    `target_commitish: ${{ github.sha }}`）。共 4 个 job：`build-test` / `signed-ipa` / `auto-tag` / `release`。
+1. **检出源码** —— `actions/checkout@v4`；
+2. **选择最高可用 Xcode 并输出环境日志** —— `ls -d /Applications/Xcode_*.app | sort -V | tail -1`
+   （可用仓库变量 `XCODE_VERSION` 固定）→ `sudo xcode-select -s` → `xcodebuild -version` /
+   `xcrun simctl list devices available` 日志；
+3. **`plutil -lint` 校验全部 plist** —— `Info.plist` / `CampusRunSimulator.entitlements` /
+   `ci/ExportOptions.plist`；
+4. **合规静态检查** —— 无 `URLSession` 上传成绩栈、无 `simulated→real` 转换实现、无禁止动作标识、
+   无硬编码证书（排除 `docs/` 与否定式免责声明）；
+5. **解析版本号与 Build Number** —— tag 触发时 `MARKETING_VERSION` 取 tag 名（去 `v` 前缀）；
+   **非 tag 构建（如 push main）改为从 `Config/App.xcconfig` 的 `MARKETING_VERSION` 读取（当前 0.1.1），
+   解析为空则直接失败，绝不静默用默认值**；`CURRENT_PROJECT_VERSION = github.run_number`；
+6. **编译门禁** —— `xcodebuild -sdk iphonesimulator ... clean build`（不加 `-quiet`，`tee` 保留完整日志）；
+7. **预热 iOS 模拟器并解析 UDID** —— `xcrun simctl list devices available -j` 解析优先 `iPhone 16`、
+   无则首个 available → `xcrun simctl boot` → `xcrun simctl bootstatus "${UDID}" -b` 阻塞到启动完成 →
+   输出 `SIM_UDID`（目的：消除 iOS 26 首次 XCTest 宿主与 runner 连接超时）；
+8. **单元测试（F60–F64）** —— 使用具体 UDID 并加固超时：
+   `-destination "id=$SIM_UDID"`、`-parallel-testing-enabled NO`、`-test-timeouts-enabled YES`、
+   `-default-test-execution-time-allowance 900`、`-maximum-test-execution-time-allowance 1800`、
+   `-destination-timeout 300`、`-derivedDataPath build/DerivedData`、
+   `-only-testing:CampusRunSimulatorTests`、`-resultBundlePath build/TestResults.xcresult`、
+   `SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) CAMPUSRUN_TEST_HOST'`（仅测试构建启用测试宿主快速启动，
+   `archive` / IPA 不定义该条件，仍走完整 UI）；
+9. **UI 测试（可选，仅 `workflow_dispatch` 手动开启）** —— `-only-testing:CampusRunSimulatorUITests`，
+   同样使用具体 UDID + 关闭并行；
+10. **构建未签名 IPA（F70）** —— `bash ci/scripts/build_unsigned_ipa.sh`；
+11. **IPA 真实存在且非空门禁 + 内容二次校验** —— `test -s` +
+    `unzip -l | grep Payload/CampusRunSimulator.app/Info.plist`，失败即 `exit 1`；
+12. **上传未签名 IPA artifact** —— `actions/upload-artifact@v4`（`if-no-files-found: error`）；
+13. **构建状态摘要** —— 输出版本号 / IPA 路径 / 字节数；
+14. **失败时输出完整日志** —— `if: failure()`，含 `xcresulttool get test-results summary|tests|insights`
+    与 `tail -200 build/xcodebuild_test.log`，以及全部构建 / archive 日志。
+
+随后 `auto-tag` job（仅 `push main` 且 `build-test` 成功）幂等创建 `v<MARKETING_VERSION>` 轻量 tag
+（版本从 `Config/App.xcconfig` 解析，当前 v0.1.1）；`release` job
+（tag `v*` 或本次 run 首次 auto-tag 成功）在**同一次 run** 内下载 IPA artifact → 打包源码 zip →
+拼接 CHANGELOG 生成 Release 说明 → `softprops/action-gh-release@v2` 发布（IPA + 源码 zip，
+`generate_release_notes: true`、`target_commitish: ${{ github.sha }}`）。共 4 个 job：
+`build-test` / `signed-ipa` / `auto-tag` / `release`。
 
 **路径 B（job `signed-ipa`，与路径 A 互斥）**：仅 `inputs.signingMode == 'signed'` 时运行，需 5 个 Secrets：
 `CERTIFICATE_P12_BASE64`、`CERTIFICATE_PASSWORD`、`PROVISIONING_PROFILE_BASE64`、`TEAM_ID`、`KEYCHAIN_PASSWORD`。
@@ -190,13 +277,15 @@ MARKETING_VERSION=0.1.0 CURRENT_PROJECT_VERSION=1 \
 **Secret 缺失时明确跳过并输出原因，绝不回退到未签名产物冒充已签名 IPA；证书 / 私钥绝不写入仓库。**
 `ci/ExportOptions.plist` 只含 `${TEAM_ID}` 等占位值，不含真实证书、私钥或已废弃的 `compileBitcode`。
 
-> CI 只证明「编译成功 / 单测通过 / IPA 真实存在且非空 / Release 发布成功」，
-> **不证明 IPA 可安装到真机、不虚构签名成功或安装成功**。
+> CI 只证明「编译成功 / 单元测试通过 / IPA 真实存在且非空 / Release 发布成功」——本仓库 run
+> `42561578021` 已在 Xcode 26.3 上实测达成这四项（见 §0）；**但不证明 IPA 可安装到真机、
+> 不虚构签名成功或安装成功，也不代表真机传感器 / HealthKit 行为已验证**。
 
 ## 7. 未签名 IPA 安装说明（如实）
 
-`build/CampusRunSimulator-unsigned.ipa` 由 `CODE_SIGNING_ALLOWED=NO` archive 后组装 `Payload/` 打包，
-**未签名，无法直接安装到未越狱的 iPhone**。可选方式：
+`build/CampusRunSimulator-unsigned.ipa`（Release 中同名资产，实测 **1,351,848 字节**）由
+`CODE_SIGNING_ALLOWED=NO` archive 后组装 `Payload/` 打包，
+**未签名，无法直接安装到未越狱的 iPhone**。这是路径 A 的**如实状态**，不是发布失败。可选方式：
 
 1. 使用 **AltStore / Sideloadly** 等工具，以个人 Apple ID 在本地重新签名后安装（个人证书有效期与
    设备安装数量限制由 Apple 决定，需使用者自行确认）；
@@ -231,8 +320,8 @@ MARKETING_VERSION=0.1.0 CURRENT_PROJECT_VERSION=1 \
 | [T08] | 定位中断恢复（`TrackFilter` gap→`segmentIndex`、跨段不连线、`RecoveryCheckpoint` 序列化 / 恢复、稀疏间隔不插值） | F64 `testTrackFilterGapCreatesNewSegment`、`testCheckpointSerializationAndRestore`、`testSparseIntervalNotInterpolated`；F62 `testSampleLoopMarkersAndMultiSegment`（多 `trkseg`） | AC-F5 / AC-F11 / AC-F2 | iOS Simulator / CI；强杀重启需真机人工 |
 | [T09] | GPX 导入导出往返（含 F66–F68 三个样例） | F62 `testGPXRoundTrip`、`testJSONRoundTrip`、`testCSVExportColumnsAndMarkers`、`testAllThreeMarkersPresent`、`testMissingEleDoesNotFabricate`、`testOnlyRteCompatible`、`testInvalidVersionRejected`、`testSampleLoopMarkersAndMultiSegment`、`testMixedOriginExportRejected`、`testUnclassifiedJSONIsRejected` | AC-C2 / AC-F2 / AC-F3 / AC-C7 | iOS Simulator / CI |
 | [T10] | SwiftData 存储（in-memory 双域隔离、CRUD、持久化等价、无转换 / 无 HK 写入路径） | F64 `testSeparateStores`、`testIDSpacesDisjoint`、`testCRUDInMemoryContainers`、`testDirtyDataIsolatedAsUnclassified`、`testOriginImmutable`、`testDuplicatePreservesOrigin`、`testNoSimulatedToRealConversionPath`、`testNoHealthKitWriteFromSimulated` | AC-C3 / AC-C7 / AC-F11 | iOS Simulator / CI |
-| [T11] | UI 交互（7 页标记可见、VoiceOver 标签、无混排、无假按钮） | F65 `testOriginBadgeOnAllSevenPages`、`testNoMixedOriginList`、`testAccessibilityLabels`、`testPrimaryTabButtonsNavigate`、`testNoForbiddenButtons`；补充 F63 规则三态测试（`testThreeStateOnly` 等，AC-C6 / AC-F8） | AC-C1 / AC-C5 / AC-C6 / AC-C7 / AC-F1 / AC-F8 / AC-F10 | **XCUITest：CI 可选 / 需模拟器**，本地 Linux 未执行 |
-| [T12] | Xcode 完整编译 | F71 `build-test` job：`xcodebuild clean build` + `xcodebuild test` + archive + IPA `test -s` 门禁 | V5.1 / V5.2 | **仅 GitHub Actions macOS Runner** |
+| [T11] | UI 交互（7 页标记可见、VoiceOver 标签、无混排、无假按钮） | F65 `testOriginBadgeOnAllSevenPages`、`testNoMixedOriginList`、`testAccessibilityLabels`、`testPrimaryTabButtonsNavigate`、`testNoForbiddenButtons`；补充 F63 规则三态测试（`testThreeStateOnly` 等，AC-C6 / AC-F8） | AC-C1 / AC-C5 / AC-C6 / AC-C7 / AC-F1 / AC-F8 / AC-F10 | **XCUITest：CI 可选 / 需模拟器**；本次 run `42561578021` 未执行（`runUITests` 默认 false），本地 Linux 未执行 |
+| [T12] | Xcode 完整编译 | F71 `build-test` job：`xcodebuild clean build` + `xcodebuild test` + archive + IPA `test -s` 门禁 | V5.1 / V5.2 | GitHub Actions macOS Runner —— ✅ **已通过**（run `42561578021`，Xcode 26.3，44 tests 0 failures） |
 
 > 补充映射：F63 `RuleEvaluatorTests` 7 个方法覆盖 AC-C6（假设值 + 免责 + 三态无分数）
 > 与 AC-F8（多预设对比 / JSON 导入导出）；F61 覆盖 AC-D7（I1–I10 与拒绝生成）。
@@ -249,64 +338,85 @@ MARKETING_VERSION=0.1.0 CURRENT_PROJECT_VERSION=1 \
   不保证把 `.gpx`（非标准扩展名）拷入 test bundle，故第三级保证 [T09] 在任意 CI 环境都能执行，
   `loadFixture(_:)` 不再因资源未拷贝而 `XCTFail`；F60 `loadInfoPlist()` 首级 `Bundle.main` 不受影响。
   文件内容仍保留在 `Fixtures/` 供真机导入与人工核对，内联常量与文件逐字一致；
-- 真机 30 min 后台、HealthKit 真机写入、iOS 26 与低版本双路径等价、深色 / 动态类型 /
-  Reduce Motion 全页面、XCUITest 全流程、GPX 真机导入均**需真机 / CI 验收，本地 Linux 未执行**，
-  见下方「真机验收清单」与 `CHANGELOG.md` 验收记录留档。
+- **单元测试已在 CI 真实通过**：run `42561578021` 在 Xcode 26.3 / iOS 26.2 Simulator 上执行
+  `44 tests, 0 failures（0 unexpected）`。以下项目仍**需真机人工验收**，本仓库不做任何「已通过」声明：
+  后台 30 min 连续记录、HealthKit 真机写入、iOS 17 等低版本功能等价、深色 / 动态类型 / Reduce Motion
+  全页面、强杀重启恢复、XCUITest 全流程（本次 run 未开启）、GPX 真机导入与系统分享面板；
+  详见下方「§10 真机验收清单」与 `CHANGELOG.md` 验收记录留档。
 
 ## 10. 真机验收清单（待验收，不得提前标记「已通过」）
+
+> 编译、单元测试、未签名 IPA、Tag、Release 已由 GitHub Actions run `42561578021` 真实通过（见 **§0**），
+> 故不再列入本表。**本表只列仍需人工 / 真机执行的项目**，状态一律保持「待验收」，
+> 完成后方可填写日期、设备型号、iOS 版本与实际结果。
 
 | 项目 | 验收编号 | 状态 |
 | --- | --- | --- |
 | 后台 30 min 连续记录、GPS 遮挡后独立 segment、跨段不连线 | AC-F5 | ⏳ 待真机验收 |
 | HealthKit 授权 + 显式勾选后写入 workout + route；拒绝 / 未勾选时不写入且不崩溃 | AC-F6 | ⏳ 待真机验收 |
-| iOS 26 与 iOS 17 各跑一遍完整功能用例，功能等价、无功能缺失 | AC-F9 | ⏳ 待双版本真机验收 |
+| iOS 26 与 iOS 17 各跑一遍完整功能用例，功能等价、无功能缺失（CI 仅覆盖 iOS 26.2 Simulator） | AC-F9 | ⏳ 待双版本真机验收 |
 | 深色模式 / 最大动态类型 / Reduce Motion 全页面，SIMULATED 标记不截断 | AC-F10 | ⏳ 待真机验收 |
 | 强杀 App 后重启，会话 / 路线 / 预设 / 设置完整；写入中断可恢复 | AC-F11 | ⏳ 待真机验收 |
 | GPX 真机导入、系统分享面板导出 | AC-F2 / AC-F3 | ⏳ 待真机验收 |
-| XCUITest 全流程（7 页标记 / 无假按钮 / 无混排） | [T11] | ⏳ 待 CI 或模拟器验收 |
-| 未签名 IPA 重签名安装 / 签名路径 B 已签名 IPA | 安装说明 | ⏳ 由使用者自行确认 |
+| XCUITest 全流程（7 页标记 / 无假按钮 / 无混排） | [T11] | ⏳ 待手动触发验收（`workflow_dispatch` + `runUITests=true`；本次 run 未执行） |
+| 签名路径 B 产出已签名 IPA（需 5 个 Secrets 齐备） | V5.3 | ⏳ 待手动触发验收（当前未配置 Secrets，未执行） |
+| 未签名 IPA 重签名安装（AltStore / Sideloadly） | 安装说明 | ⏳ 由使用者自行确认 |
 
 ## 11. 诚实披露的限制与本地已执行校验
 
 ### 11.1 限制（必须如实告知）
 
 1. **本工程源码在 Linux 沙箱生成，本地无 `swiftc` / `swift` / Xcode / iOS Simulator**：
-   无法编译、无法运行 XCTest / XCUITest、无法 archive、无法生成 IPA、无法发布 Release。
-2. **最终验收以 GitHub Actions macOS Runner 实际运行结果为准**：编译成功、单元测试通过、
-   IPA 真实存在且非空、Release 成功发布，均以 `ios-build.yml` 的 run 日志与 artifact 为准。
-3. **iOS 26 官方 Liquid Glass API 命名需在 macOS Runner（Xcode 26）上编译验证**；
-   若 `GlassEffectContainer` / `.glassEffect` / `.glassEffectID` 命名与 SDK 有差异，
-   **仅需修改 `CampusRunSimulator/UI/Theme/GlassModifier.swift`**（F45 单点收敛），其余 73 个文件不受影响；
-   Xcode 16 会自动走 `#if compiler(>=6.2)` 的材质回退路径。
-   QA 第 1 轮已按 Apple 官方签名修正：`interactive` 是 `Glass.interactive(Bool) -> Glass`（作用在 Glass 值上），
-   不存在 `View.interactive(_:)`；官方路径已改为先构造 `Glass` 局部常量再传给 `.glassEffect(_:in:)`，
-   两个分支都从 View 链移除 interactive 修饰符。**该修正仍需 Xcode 26 实机编译最终确认。**
-4. **Release 闭环与 Fixtures / 签名修复（QA 第 1 轮）均为静态文本层修复**：
-   `auto-tag` job 幂等创建 `v0.1.0` tag 并在同一次 run 内发布 Release、路径 B 命令行显式
-   `CODE_SIGNING_ALLOWED=YES` 反向覆盖、F62 三个 GPX 内联兜底——三者本地 Linux **均未实机运行**，
-   是否真正产出 Tag / Release / 可签名 IPA / 通过单测，仍以 GitHub Actions macOS Runner 实际日志为准。
+   本地无法编译、无法运行 XCTest / XCUITest、无法 archive、无法生成 IPA、无法发布 Release。
+   **但交付结果已由 GitHub Actions 在 macOS Runner 上用 Xcode 26.3 真实构建通过**
+   （run `42561578021`：编译门禁 ✓、单元测试 44 tests 0 failures ✓、未签名 IPA 1,351,848 字节 ✓、
+   `v0.1.0` tag ✓、Release ✓，详见 §0）。
+2. **CI 已实测的项目**：编译成功、单元测试通过、IPA 真实存在且非空、Release 成功发布——四者均已由
+   run `42561578021` 的日志与 Release 资产证实，可直接下载 `CampusRunSimulator-unsigned.ipa` 校验字节数
+   与内部结构。**CI 未覆盖、仍需真机人工验收的项目**：后台 30 min 真实连续记录（AC-F5）、
+   HealthKit 真机写入（AC-F6）、iOS 17 等低版本功能等价（AC-F9，CI 仅在 iOS 26.2 模拟器上运行）、
+   深色 / 动态类型 / Reduce Motion 全页面（AC-F10）、强杀重启恢复（AC-F11）、
+   XCUITest 全流程（[T11]，本次 run 未开启）、签名路径 B（需 5 个 Secrets）、
+   GPX 真机导入与系统分享面板。清单见 §10。
+3. **iOS 26 官方 Liquid Glass API 命名已在 Xcode 26.3 上真实编译通过**：
+   `GlassEffectContainer` / `.glassEffect(_:in:)` / `.glassEffectID(_:in:)` /
+   `Glass.interactive(Bool) -> Glass` 与 SDK 一致（单点收敛在
+   `CampusRunSimulator/UI/Theme/GlassModifier.swift`，F45）。QA 第 1 轮按 Apple 官方签名把 `interactive`
+   从 View 修饰链移到 `Glass` 值上的修正，**已由本次真实构建验证**；Xcode 16 等低版本仍自动走
+   `#if compiler(>=6.2)` 的材质回退路径，但低版本上的显示等价性仍需真机确认。
+4. **Release 闭环已实测成立**：`auto-tag` job 幂等创建轻量 tag `v0.1.0` 并在**同一次 run** 内发布
+   Release（[releases/tag/v0.1.0](https://github.com/zxiang739-lab/CampusRunSimulator/releases/tag/v0.1.0)），
+   资产为未签名 IPA（1,351,848 字节）+ 源码 zip（482,410 字节）。路径 B（已签名）因**未配置 5 个 Secrets
+   而从未执行**，其命令行 `CODE_SIGNING_ALLOWED=YES` 反向覆盖逻辑**仍未经真实签名构建验证**。
 5. CI 首次失败时应依据 `xcodebuild` 日志修正 F01/F02/F03 工程配置，**不得回头修改 PRD 或放宽合规约束**。
-6. 未签名 IPA 不可直接安装；签名状态与安装结果由使用者自行确认（见第 7 节）。
+6. 未签名 IPA 不可直接安装到未越狱 iPhone；签名状态与安装结果由使用者自行确认（见第 7 节）。
+   本仓库不虚构「已签名 IPA 已验证」或「安装成功」。
 7. 规则预设全部为「示例假设值」，非任何平台或学校的真实规则；评估不产生分数、不上传成绩。
 8. 引用来源与检索缺口见 `docs/01-Research-and-PRD.md` **附录 A / 附录 B**。
 
-### 11.2 本地 Linux 上真实执行过的校验（唯一可比编译验证的项目）
+### 11.2 本地 Linux 上真实执行过的校验（结构与语法层，非编译验证）
 
 ```bash
 bash -n ci/scripts/build_unsigned_ipa.sh                         # F70 脚本语法
 python3 -c "import xml.dom.minidom; ..."                        # F66–F68 三个 GPX 的 XML 合法性
 python3 -c "import plistlib; ..."                               # F04/F05/F69 三个 plist 合法性
 python3 -c "import yaml; ..." 或键名 / 缩进抽查                    # F71 workflow YAML 基本结构
-python3 静态扫描                                                  # 74 文件数量、无 TODO / 占位、无硬编码证书
-# —— QA 第 1 轮修复追加（本轮本地真实执行）——
+python3 静态扫描                                                  # 75 文件数量、无 TODO / 占位、无硬编码证书
+# —— QA 第 1 轮修复追加（本地真实执行）——
 python3 -c "import yaml; yaml.safe_load(...)"                   # 4 job / auto-tag.outputs / target_commitish / 无残留 GITHUB_REF_NAME
 grep 'CODE_SIGNING_ALLOWED=YES' .github/workflows/ios-build.yml # 路径 B archive + exportArchive 两处
 grep -vF '.interactive(interactive)' .../GlassModifier.swift    # 已无 View 链式写法
 python3 逐字比对 .../CodecTests.swift 内联常量 vs Fixtures/*.gpx # 3 个常量与文件字节一致
+# —— CI 加固第 5 轮追加（本地真实执行）——
+yaml.safe_load(...) 逐 job 逐 step 打印                            # build-test 14 步，预热为第 7 步
+提取全部 run 脚本 → bash -n                                        # 27/27 通过
+python3 关键参数存在性检查                                         # 18/18（UDID / 6 项超时 / TEST_HOST / 诊断）
+bash -c "echo SWIFT_ACTIVE_COMPILATION_CONDITIONS='\$(inherited) ...'" # 确认 $(inherited) 不被执行
 ```
 
-> 这些校验只覆盖「文本 / 语法 / 结构」层面，**不等价于 Swift 编译或 XCTest 运行**；
-> 实际执行结果与命令见交付批次回复，最终结论以 macOS Runner 为准。
+> 上表校验只覆盖「文本 / 语法 / 结构」层面，**不等价于 Swift 编译或 XCTest 运行**；
+> 真正的编译与测试结论已由 GitHub Actions macOS Runner 实跑给出（run `42561578021`，
+> Xcode 26.3，44 tests 0 failures），见 **§0**。
 
 ## 12. 许可证
 

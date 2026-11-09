@@ -14,7 +14,9 @@ name: iOS 构建 · 测试 · IPA · Release
 # 默认关闭不会污染已签名路径，也无需改动工程文件。
 #
 # Release 触发（QA P0 修复）：push main 且 build-test 成功后，auto-tag job 幂等创建轻量
-# tag v0.1.0，并在同一次 run 内由 release job 发布 GitHub Release + 上传真实 IPA；
+# tag v${MARKETING_VERSION}（版本号统一来自 Config/App.xcconfig，当前 v0.1.1），并在同一次 run
+# 内由 release job 发布 GitHub Release + 上传真实 IPA；升级版本只需改 Config/App.xcconfig，
+# 全链路（编译 / IPA / tag / Release）自动跟随，workflow 内不存在写死的版本字面量；
 # GITHUB_TOKEN 推送的 tag 按 GitHub 官方规定不会触发新的 workflow run（天然防循环）。
 #
 # Runner 说明：使用 macos-15（或更新带 Xcode 16+ 的 image）。iOS 26 官方 Liquid Glass API
@@ -156,7 +158,12 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             MARKETING_VERSION="${GITHUB_REF#refs/tags/v}"
           else
-            MARKETING_VERSION="0.1.0"
+            # 版本号唯一来源：Config/App.xcconfig 的 MARKETING_VERSION（workflow 内不再硬编码版本）。
+            MARKETING_VERSION=$(awk -F'=' '/^MARKETING_VERSION/{gsub(/[ \t]/,"",$2);print $2}' Config/App.xcconfig)
+          fi
+          if [[ -z "${MARKETING_VERSION}" ]]; then
+            echo "错误：无法从 Config/App.xcconfig 解析 MARKETING_VERSION" >&2
+            exit 1
           fi
           CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}"
           echo "MARKETING_VERSION=${MARKETING_VERSION}" >> "$GITHUB_ENV"
@@ -366,7 +373,12 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             MARKETING_VERSION="${GITHUB_REF#refs/tags/v}"
           else
-            MARKETING_VERSION="0.1.0"
+            # 版本号唯一来源：Config/App.xcconfig 的 MARKETING_VERSION（workflow 内不再硬编码版本）。
+            MARKETING_VERSION=$(awk -F'=' '/^MARKETING_VERSION/{gsub(/[ \t]/,"",$2);print $2}' Config/App.xcconfig)
+          fi
+          if [[ -z "${MARKETING_VERSION}" ]]; then
+            echo "错误：无法从 Config/App.xcconfig 解析 MARKETING_VERSION" >&2
+            exit 1
           fi
           echo "MARKETING_VERSION=${MARKETING_VERSION}" >> "$GITHUB_ENV"
           echo "CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
@@ -500,16 +512,18 @@ jobs:
           echo "===== build 目录 ====="
           ls -laR build 2>/dev/null || true
 
-  # ===================== Auto-tag：首次成功构建后创建轻量 tag v0.1.0 =====================
+  # ===================== Auto-tag：首次成功构建后创建轻量 tag v${MARKETING_VERSION} =====================
+  # 版本来源：Config/App.xcconfig 的 MARKETING_VERSION（当前 v0.1.1），本 job 内不写死任何版本字面量；
+  #           升级版本只需改 Config/App.xcconfig，tag / Release 自动跟随。
   # 防循环（QA §4.3 / R5，三重机制）：
   #   ① 本 job 用默认 GITHUB_TOKEN 推送 tag，按 GitHub 官方规定不会创建新的 workflow run；
   #   ② auto-tag.if 严格限定 github.ref == refs/heads/main，tag push（refs/tags/*）不会再次进入；
   #   ③ release job 不推送任何 git 对象、不产生新事件。
-  # 幂等：git rev-parse 检测 v0.1.0 已存在则 created=false，release.if 据此跳过，
-  #       避免每次 push main 都重复发布 / 覆盖同一 Release。
+  # 幂等：git rev-parse 检测 refs/tags/v${MARKETING_VERSION} 已存在则 created=false，release.if 据此跳过，
+  #       避免同一次版本重复发布 / 覆盖同一 Release；版本号升级后 tag 名随之变化，自然产生新 Release。
   # 不引入任何新 Secret：仅使用默认 GITHUB_TOKEN（QA 方案 A′ 的 PAT 方案不采用）。
   auto-tag:
-    name: 首次成功构建后幂等创建轻量 tag v0.1.0
+    name: 首次成功构建后幂等创建轻量 tag（版本取自 Config/App.xcconfig）
     needs: [build-test]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build-test.result == 'success' }}
     runs-on: ubuntu-latest
@@ -530,19 +544,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          echo "tag=v0.1.0" >> "$GITHUB_OUTPUT"
+          # tag 名由 Config/App.xcconfig 解析，禁止写死版本号（否则升级版本后 Release 永不触发）。
+          VER=$(awk -F'=' '/^MARKETING_VERSION/{gsub(/[ \t]/,"",$2);print $2}' Config/App.xcconfig)
+          TAG="v${VER}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "解析版本：${TAG}"
           # 幂等：tag 已存在则直接跳过，绝不重复推送 / 移动 tag。
-          if git rev-parse -q --verify "refs/tags/v0.1.0" >/dev/null; then
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
             echo "created=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::tag v0.1.0 已存在，幂等跳过，不重复发布 Release"
+            echo "::notice::tag ${TAG} 已存在，幂等跳过，不重复发布 Release"
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag v0.1.0 "${GITHUB_SHA}"
-          git push origin refs/tags/v0.1.0
+          git tag "${TAG}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${TAG}"
           echo "created=true" >> "$GITHUB_OUTPUT"
-          echo "::notice::已创建并推送轻量 tag v0.1.0 -> ${GITHUB_SHA}"
+          echo "::notice::已创建并推送轻量 tag ${TAG} -> ${GITHUB_SHA}"
 
   # ===================== Release：tag v* 或 main 首次 auto-tag，同一次 run 内闭环 =====================
   # 两条合法入口：① 人工 / 外部 push 的 v* tag；② 本次 run 内 auto-tag 首次创建成功。

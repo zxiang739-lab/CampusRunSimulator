@@ -48,6 +48,8 @@ public enum AppRoute: Hashable, Sendable {
 private struct ComplianceConfirmationView: View {
     @Binding var isConfirmed: Bool
     let isPersistent: Bool
+    /// 确认后的关闭回调：由 RootView 负责把 `showComplianceSheet` 置为 false。
+    let onConfirm: () -> Void
 
     var body: some View {
         NavigationStack {
@@ -87,12 +89,17 @@ private struct ComplianceConfirmationView: View {
 
                     Button {
                         isConfirmed = true
+                        onConfirm()
                     } label: {
                         Text("我已阅读并确认")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .accessibilityLabel("我已阅读并确认合规声明")
+
+                    Text("确认后即可进入 App，本次确认会被记住，不再重复弹出。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(24)
             }
@@ -174,10 +181,17 @@ public struct RootView: View {
                 route(to: target)
             }
         }
+        .onChange(of: complianceConfirmed) { _, confirmed in
+            // 双保险：任何路径把确认标记置为 true 时都关闭全屏页，避免用户卡在合规页。
+            if confirmed {
+                showComplianceSheet = false
+            }
+        }
         .fullScreenCover(isPresented: $showComplianceSheet) {
             ComplianceConfirmationView(
                 isConfirmed: $complianceConfirmed,
-                isPersistent: stores?.isPersistent ?? false
+                isPersistent: stores?.isPersistent ?? false,
+                onConfirm: { showComplianceSheet = false }
             )
         }
         .modifier(AppThemeModifiers(
