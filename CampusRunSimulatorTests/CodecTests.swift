@@ -49,16 +49,26 @@ final class CodecTests: XCTestCase {
             if index > 0 && index != 3 {
                 cumulative += 20
             }
+            // 拆分子表达式，避免 22 个参数的大初始化触发类型检查超时。
+            let idx = Double(index)
+            let ts = baseTime.addingTimeInterval(idx * 10)
+            let lat: Double = 30.3010 + idx * 0.0002
+            let lon: Double = 120.0810 + idx * 0.0002
+            let alt: Double = 12.5 + idx * 0.3
+            let stride: Double = Units.strideLength(speedMps: 2.0, cadenceSpm: 170)
+            let steps: Double = idx * 28
+            let gainSoFar: Double = idx * 0.3
+            let flags: [QualityFlag] = (segment == 1 && index == 3) ? [.gap] : []
             result.append(
                 TrackPoint(
                     id: OriginID.makeID(origin, suffix: "codec_point_\(index)"),
                     sessionId: sessionID,
                     dataOrigin: origin,
-                    timestamp: baseTime.addingTimeInterval(Double(index) * 10),
-                    elapsedSeconds: Double(index) * 10,
-                    latitude: 30.3010 + Double(index) * 0.0002,
-                    longitude: 120.0810 + Double(index) * 0.0002,
-                    altitudeM: 12.5 + Double(index) * 0.3,
+                    timestamp: ts,
+                    elapsedSeconds: idx * 10,
+                    latitude: lat,
+                    longitude: lon,
+                    altitudeM: alt,
                     horizontalAccuracyM: 5,
                     verticalAccuracyM: 3,
                     courseDegrees: 90,
@@ -67,13 +77,13 @@ final class CodecTests: XCTestCase {
                     instantPaceSecPerKm: 500,
                     avgPaceSecPerKm: 500,
                     cadenceSpm: 170,
-                    strideLengthM: Units.strideLength(speedMps: 2.0, cadenceSpm: 170),
-                    cumulativeSteps: Double(index) * 28,
+                    strideLengthM: stride,
+                    cumulativeSteps: steps,
                     cumulativeDistanceM: cumulative,
-                    elevationGainSoFarM: Double(index) * 0.3,
+                    elevationGainSoFarM: gainSoFar,
                     elevationLossSoFarM: 0,
                     segmentIndex: segment,
-                    qualityFlags: segment == 1 && index == 3 ? [.gap] : []
+                    qualityFlags: flags
                 )
             )
         }

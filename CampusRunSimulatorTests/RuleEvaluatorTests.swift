@@ -33,24 +33,33 @@ final class RuleEvaluatorTests: XCTestCase {
     }
 
     private func makePoints(origin: DataOrigin, sessionID: String) -> [TrackPoint] {
-        (0..<12).map { index in
-            TrackPoint(
+        // 拆分为独立子表达式，避免单个 TrackPoint(...) 大初始化触发类型检查超时。
+        (0..<12).map { index -> TrackPoint in
+            let idx = Double(index)
+            let ts = baseTime.addingTimeInterval(idx * 30)
+            let lat: Double = 30.3010 + idx * 0.0003
+            let lon: Double = 120.0810 + idx * 0.0003
+            let alt: Double = 12 + idx * 0.2
+            let stride: Double = Units.strideLength(speedMps: 3.3, cadenceSpm: 170)
+            let steps: Double = idx * 85
+            let distance: Double = idx * 250
+            return TrackPoint(
                 id: OriginID.makeID(origin, suffix: "rule_point_\(index)"),
                 sessionId: sessionID,
                 dataOrigin: origin,
-                timestamp: baseTime.addingTimeInterval(Double(index) * 30),
-                elapsedSeconds: Double(index) * 30,
-                latitude: 30.3010 + Double(index) * 0.0003,
-                longitude: 120.0810 + Double(index) * 0.0003,
-                altitudeM: 12 + Double(index) * 0.2,
+                timestamp: ts,
+                elapsedSeconds: idx * 30,
+                latitude: lat,
+                longitude: lon,
+                altitudeM: alt,
                 horizontalAccuracyM: 5,
                 speedMps: 3.3,
                 instantPaceSecPerKm: 300,
                 avgPaceSecPerKm: 300,
                 cadenceSpm: 170,
-                strideLengthM: Units.strideLength(speedMps: 3.3, cadenceSpm: 170),
-                cumulativeSteps: Double(index) * 85,
-                cumulativeDistanceM: Double(index) * 250,
+                strideLengthM: stride,
+                cumulativeSteps: steps,
+                cumulativeDistanceM: distance,
                 segmentIndex: 0
             )
         }

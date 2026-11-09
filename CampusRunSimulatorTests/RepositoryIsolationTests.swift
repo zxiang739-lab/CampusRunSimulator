@@ -38,20 +38,26 @@ final class RepositoryIsolationTests: XCTestCase {
     }
 
     private func makePoints(origin: DataOrigin, sessionID: String, count: Int = 5) -> [TrackPoint] {
-        (0..<count).map { index in
-            TrackPoint(
+        // 拆分子表达式，显式标注闭包返回类型，避免大初始化触发类型检查超时。
+        (0..<count).map { index -> TrackPoint in
+            let idx = Double(index)
+            let ts = baseTime.addingTimeInterval(idx)
+            let lat: Double = 30.3010 + idx * 0.0001
+            let lon: Double = 120.0810 + idx * 0.0001
+            let distance: Double = idx * 40
+            return TrackPoint(
                 id: OriginID.makeID(origin, suffix: "\(sessionID)_p\(index)"),
                 sessionId: sessionID,
                 dataOrigin: origin,
-                timestamp: baseTime.addingTimeInterval(Double(index)),
-                elapsedSeconds: Double(index),
-                latitude: 30.3010 + Double(index) * 0.0001,
-                longitude: 120.0810 + Double(index) * 0.0001,
+                timestamp: ts,
+                elapsedSeconds: idx,
+                latitude: lat,
+                longitude: lon,
                 altitudeM: 12,
                 horizontalAccuracyM: 5,
                 speedMps: 3.3,
                 cadenceSpm: 170,
-                cumulativeDistanceM: Double(index) * 40,
+                cumulativeDistanceM: distance,
                 segmentIndex: 0
             )
         }
@@ -185,13 +191,18 @@ final class RepositoryIsolationTests: XCTestCase {
 
         // 删除一方不影响另一方；clear 只清除对应容器。
         try await repository.delete(ids: [sim.id], origin: .simulated)
-        XCTAssertTrue(try await repository.fetch(origin: .simulated, predicate: RunPredicate()).isEmpty)
-        XCTAssertEqual(try await repository.fetch(origin: .real, predicate: RunPredicate()).count, 1)
-        XCTAssertTrue(try await repository.points(sessionId: sim.id).isEmpty)
+        let fetchedSim = try await repository.fetch(origin: .simulated, predicate: RunPredicate())
+        XCTAssertTrue(fetchedSim.isEmpty)
+        let fetchedReal = try await repository.fetch(origin: .real, predicate: RunPredicate())
+        XCTAssertEqual(fetchedReal.count, 1)
+        let simPointsAfterDelete = try await repository.points(sessionId: sim.id)
+        XCTAssertTrue(simPointsAfterDelete.isEmpty)
 
         try await repository.clear(origin: .real)
-        XCTAssertTrue(try await repository.fetch(origin: .real, predicate: RunPredicate()).isEmpty)
-        XCTAssertTrue(try await repository.points(sessionId: real.id).isEmpty)
+        let realAfterClear = try await repository.fetch(origin: .real, predicate: RunPredicate())
+        XCTAssertTrue(realAfterClear.isEmpty)
+        let realPointsAfterClear = try await repository.points(sessionId: real.id)
+        XCTAssertTrue(realPointsAfterClear.isEmpty)
     }
 
     func testDirtyDataIsolatedAsUnclassified() async throws {
@@ -230,7 +241,8 @@ final class RepositoryIsolationTests: XCTestCase {
         XCTAssertTrue(placeholder.id.hasPrefix("unclassified_"))
         XCTAssertEqual(placeholder.dataOrigin, .simulated, "安全占位来源为测试数据，绝不默认真实记录")
         XCTAssertTrue(placeholder.note.contains(AppConstants.unclassifiedSectionName))
-        XCTAssertTrue(try await repository.fetch(origin: .real, predicate: RunPredicate()).isEmpty)
+        let realAfterDirty = try await repository.fetch(origin: .real, predicate: RunPredicate())
+        XCTAssertTrue(realAfterDirty.isEmpty)
     }
 
     // MARK: - [T10] dataOrigin 不可变 / 无转换路径 / 无 HealthKit 写入路径
@@ -278,8 +290,10 @@ final class RepositoryIsolationTests: XCTestCase {
         let copiedPoints = try await repository.points(sessionId: copy.id)
         XCTAssertEqual(copiedPoints.count, points.count)
         XCTAssertTrue(copiedPoints.allSatisfy { $0.dataOrigin == .simulated && $0.sessionId == copy.id })
-        XCTAssertEqual(try await repository.fetch(origin: .simulated, predicate: RunPredicate()).count, 2)
-        XCTAssertTrue(try await repository.fetch(origin: .real, predicate: RunPredicate()).isEmpty)
+        let simCountAfterDuplicate = try await repository.fetch(origin: .simulated, predicate: RunPredicate())
+        XCTAssertEqual(simCountAfterDuplicate.count, 2)
+        let realAfterDuplicate = try await repository.fetch(origin: .real, predicate: RunPredicate())
+        XCTAssertTrue(realAfterDuplicate.isEmpty)
     }
 
     func testNoSimulatedToRealConversionPath() throws {
