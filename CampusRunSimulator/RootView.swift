@@ -44,82 +44,15 @@ public enum AppRoute: Hashable, Sendable {
     }
 }
 
-/// 首次启动强制合规确认视图（§8 A12 / PRD §B.6.1）。
-private struct ComplianceConfirmationView: View {
-    @Binding var isConfirmed: Bool
-    let isPersistent: Bool
-    /// 确认后的关闭回调：由 RootView 负责把 `showComplianceSheet` 置为 false。
-    let onConfirm: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("使用前请先确认")
-                        .font(.largeTitle.bold())
-                    Text(AppConstants.complianceStatement)
-                        .font(.headline)
-                    Text("本项目为教学研究 / 个人自用 / 数据分析工具。仿真数据由 App 内独立数据源生成，"
-                         + "不代表真实运动；真实记录来自设备传感器。两类数据物理隔离，永不互相转换。")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-
-                    Text("合规红线摘要（R1–R8）")
-                        .font(.headline)
-                    ForEach(AppConstants.complianceRedLines.indices, id: \.self) { index in
-                        HStack(alignment: .top, spacing: 10) {
-                            Text("R\(index + 1)")
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                            Text(AppConstants.complianceRedLines[index])
-                                .font(.subheadline)
-                        }
-                    }
-
-                    Text("标记示例（文字 + 图标双通道，不依赖颜色）")
-                        .font(.headline)
-                    HStack(spacing: 12) {
-                        OriginBadge(.simulated, style: .full)
-                        OriginBadge(.real, style: .full)
-                    }
-
-                    Text("当前数据层：\(isPersistent ? "本地持久化（双独立存储域）" : "内存模式（数据不持久化，仍分域）")")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    Button {
-                        isConfirmed = true
-                        onConfirm()
-                    } label: {
-                        Text("我已阅读并确认")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityLabel("我已阅读并确认合规声明")
-
-                    Text("确认后即可进入 App，本次确认会被记住，不再重复弹出。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(24)
-            }
-            .navigationTitle("合规声明")
-        }
-        .interactiveDismissDisabled(true)
-    }
-}
-
 /// 根视图：自定义玻璃底部栏 + TabView（4 主入口）+ NavigationStack（7 页路由）
-/// + 首次合规确认 + 权限异常横幅。所有玻璃材质均经 F45 唯一入口 `glassCard`。
+/// + 权限异常横幅。所有玻璃材质均经 F45 唯一入口 `glassCard`。
 @MainActor
 public struct RootView: View {
     @Environment(\.persistentStores) private var stores
-    @AppStorage("campusrun.complianceConfirmed") private var complianceConfirmed: Bool = false
     @AppStorage("campusrun.permissionDegraded") private var permissionDegraded: Bool = false
 
     @State private var selection: AppRoute = .home
     @State private var homePath: [AppRoute] = []
-    @State private var showComplianceSheet: Bool = false
     @State private var showPermissionBanner: Bool = false
     @State private var navigation = AppNavigation.shared
     @State private var settingsStore = AppSettingsStore.shared
@@ -128,7 +61,6 @@ public struct RootView: View {
     public init() {
         _selection = State(initialValue: .home)
         _homePath = State(initialValue: [])
-        _showComplianceSheet = State(initialValue: false)
         _showPermissionBanner = State(initialValue: false)
     }
 
@@ -165,9 +97,6 @@ public struct RootView: View {
         .onAppear {
             AppServices.shared.configure(stores)
             settingsStore.reload()
-            if !complianceConfirmed {
-                showComplianceSheet = true
-            }
             showPermissionBanner = permissionDegraded
         }
         .onReceive(NotificationCenter.default.publisher(for: .campusRunWillEnterForeground)) { _ in
@@ -181,44 +110,22 @@ public struct RootView: View {
                 route(to: target)
             }
         }
-        .onChange(of: complianceConfirmed) { _, confirmed in
-            // 双保险：任何路径把确认标记置为 true 时都关闭全屏页，避免用户卡在合规页。
-            if confirmed {
-                showComplianceSheet = false
-            }
-        }
-        .fullScreenCover(isPresented: $showComplianceSheet) {
-            ComplianceConfirmationView(
-                isConfirmed: $complianceConfirmed,
-                isPersistent: stores?.isPersistent ?? false,
-                onConfirm: { showComplianceSheet = false }
-            )
-        }
         .modifier(AppThemeModifiers(
             appearance: settingsStore.settings.appearance,
             dynamicTypeOverride: settingsStore.settings.dynamicTypeOverride
         ))
     }
 
-    /// 顶部常驻合规栏 + 7 页导航菜单 + 权限异常横幅（全部绑定真实动作）。
+    /// 顶部常驻 7 页导航菜单 + 权限异常横幅（全部绑定真实动作）。
     @ViewBuilder
     private var headerBar: some View {
         VStack(spacing: 6) {
             HStack(spacing: 10) {
-                Image(systemName: "checkmark.shield")
+                Image(systemName: "figure.run")
                     .accessibilityHidden(true)
-                Text(AppConstants.complianceStatement)
-                    .font(.caption)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
+                Text("Campus Run Simulator")
+                    .font(.headline)
                 Spacer(minLength: 4)
-                Button {
-                    showComplianceSheet = true
-                } label: {
-                    Label("合规详情", systemImage: "info.circle")
-                        .labelStyle(.iconOnly)
-                }
-                .accessibilityLabel("查看合规声明")
                 Menu {
                     ForEach(allRoutes, id: \.self) { route in
                         Button {

@@ -590,3 +590,162 @@ App.xcconfig :21-22 仍 NO；pbxproj 含 12 行 NO（保留）
 ---
 
 *第 2 轮（最终轮）回归验证结束 · 路由 `NoOne` · 4 项修复全部 PASS · 遗留 10 条（阻断交付 0 条）· 测试通过率 `N/A（本环境未执行，最终以 GitHub Actions macOS Runner 实际结果为准）` · 最终验收仍以 GitHub Actions 实际构建成功 + IPA 真实存在 + Release 成功发布为准，本环境无法替代*
+
+---
+
+## 9. 第 3 轮回归（真机反馈 BugFix 核查）
+
+### 9.0 本轮背景与环境边界（重申）
+
+用户通过未签名 IPA 侧载在真机运行 **v0.1.0**，反馈两个用户可见缺陷：
+
+| 编号 | 用户可见现象 | 工程师归因（自述） |
+| --- | --- | --- |
+| U1 | 「使用声明」关不掉，首次启动永久卡在合规确认页 | `ComplianceConfirmationView` 只写 `isConfirmed`，无任何路径把 `showComplianceSheet` 置回 `false` |
+| U2 | 桌面图标空白（无 App Icon） | `AppIcon.appiconset/Contents.json` 无 `filename` 键，资源集内也无任何 PNG |
+
+工程师提交 `e908ae1`（`fix(ui): 修复合规确认页无法关闭与桌面图标缺失，版本升至 0.1.1`）。**本节不采信工程师自述，全部结论基于本环境实测命令与源码行号。**
+
+**本环境硬边界（与第 1/2 轮一致，未改变）**：Ubuntu Linux，`xcodebuild` / `swiftc` / `xcrun` / `simctl` / `actool` **均不存在**。因此本轮：
+
+- 编译、`xcodebuild test`、XCTest、XCUITest、真机行为、`Assets.car` 实际产出、IPA 实际内容 —— **一律无法执行**；
+- 测试通过率仍记 **`N/A（本环境未执行）`**，不虚构任何数字；
+- 凡涉及 actool / 真机渲染的结论，一律标注「**静态推断**」并给出推理链，不与实测混同。
+- CI run 的结论由主理人另行核验，本节不引用、不预测 CI 结果。
+
+---
+
+### 9.1 回归项 R-A：合规确认页关闭链路（P0）
+
+被审文件：`CampusRunSimulator/RootView.swift`（368 行，已全文读取）。
+
+| # | 断言 | 结论 | 证据（文件:行 / 代码原文） |
+| --- | --- | --- | --- |
+| A1 | `ComplianceConfirmationView` 存在 `onConfirm` **存储属性**，且**无默认值**（漏传即编译失败，不会静默） | **PASS** | `RootView.swift:52` `let onConfirm: () -> Void`。`let` 无默认值 → 唯一构造点 `:191-195` 必须显式传入；若漏传则编译错误，不可能静默退化 |
+| A2 | 主按钮闭包**同时**执行 `isConfirmed = true` 与 `onConfirm()`，且**先 confirmed 后 onConfirm** | **PASS** | `RootView.swift:90-93`：`Button {` → `:91 isConfirmed = true` → `:92 onConfirm()`。顺序符合「先落盘 `@AppStorage`，再 dismiss」 |
+| A3 | `fullScreenCover` 传入 `onConfirm: { showComplianceSheet = false }` | **PASS** | `RootView.swift:190-196`；`:194` 原文 `onConfirm: { showComplianceSheet = false }` |
+| A4 | 存在 `.onChange(of: complianceConfirmed)` 双保险，内部 `if confirmed { showComplianceSheet = false }` | **PASS** | `RootView.swift:184-189`；`:186-188` 原文 `if confirmed { showComplianceSheet = false }`（含注释说明「避免用户卡在合规页」） |
+| A5 | `showComplianceSheet` 的 `@State` 声明与 `init()` 初值**均为 `false`**（避免首帧误弹） | **PASS** | 声明 `:122` `@State private var showComplianceSheet: Bool = false`；`init()` `:131` `_showComplianceSheet = State(initialValue: false)` |
+| A6 | `onAppear` 仍为 `if !complianceConfirmed { showComplianceSheet = true }` | **PASS** | `RootView.swift:165-172`；`:168 `if !complianceConfirmed {` → `:169 showComplianceSheet = true` |
+| A7 | `.interactiveDismissDisabled(true)` 保留（合规强制确认），且主按钮**真能关** | **PASS** | 保留：`:108` `.interactiveDismissDisabled(true)`。可关闭链路完整：`:92 onConfirm()` → `:194` 闭包写 `showComplianceSheet = false` → `:122` `$showComplianceSheet` 绑定驱动 `fullScreenCover` 收起。**这正是本次核心断言，链路无断点** |
+| A8 | 副作用检查：escaping 闭包捕获 `@State` 是否合法；`isConfirmed`+`onConfirm` 双重置 false 是否冲突 | **PASS（合法且无害）** | ① 合法性：`@State` 的 `wrappedValue` 是 `nonmutating set`，故在 escaping 闭包内写 `self.showComplianceSheet` **不需要 `mutating`**，struct 值捕获不阻断；**同类前例已被 v0.1.0 编译验证**——`:173-178` 的 `.onReceive { … showPermissionBanner = permissionDegraded }` 是同构写法，若该写法不合法则 v0.1.0 根本不会有 IPA。② 重复 dismiss：`:91` 触发 onChange 分支、`:92` 直接置 false，两者写入**同一目标值 `false`**，onChange 在下一轮 update 才执行（此时已是 false，再置 false 为幂等空操作），无竞态、无相互覆盖 |
+| A9 | 其他入口：顶栏「合规详情」可再次打开且能再次关闭 | **PASS** | 打开：`:215-219` `Button { showComplianceSheet = true }`（`:216`）。关闭：**关键推论**——用户已确认后再次打开时 `isConfirmed = true` 不产生值变化 → `:184` 的 onChange **不会触发**，此时**唯一**关闭路径就是 `:92 onConfirm()`。该路径存在且正确，故二次开关成立；反之若只保留 onChange 双保险则会二次卡死，说明 `:194` 的 `onConfirm` 是**必要且不可删**的 |
+
+**R-A 根因链验证（是否真的治本）**：v0.1.0 的可用关闭路径只有「`fullScreenCover` 的 `isPresented` 变 false」这一条，而全仓 `showComplianceSheet` 的写入点在旧版只有两处 `= true`（`onAppear`、顶栏按钮），**没有任何 `= false`**；叠加 `:108 .interactiveDismissDisabled(true)` 禁掉下滑手势 → 用户**唯一出路被堵死**，与用户反馈「关不掉、进不去 App」完全吻合。本次新增 `:187` 与 `:194` 两处 `= false` 写入点，chain 闭合。**结论：R-A 治本，非规避。**
+
+---
+
+### 9.2 回归项 R-B：AppIcon 资源链（P0）
+
+| # | 断言 | 结论 | 证据（实测命令输出） |
+| --- | --- | --- | --- |
+| B1 | `AppIcon-1024.png` 真实存在；实测 size / mode / alpha / 字节数 | **PASS** | PIL 实测：`format=PNG`、`size=(1024, 1024)`、`mode=RGB`、**无 alpha 通道**、`is_square=True`、`bytes=130275`；`file` 交叉验证 `PNG image data, 1024 x 1024, 8-bit/color RGB, non-interlaced`；`sha256=9992507f8aa78722ebd72570a8fca4dfb0fbe325db488bed00d833885f24b9ee`。符合 actool 对 App Icon 的硬要求（1024×1024、不透明 RGB、无 alpha） |
+| B2 | `images[0].filename` 与真实文件名**完全一致**；`idiom/platform/size` 为单尺寸格式；JSON 合法 | **PASS** | `json.load` 通过；`filename='AppIcon-1024.png'`、`idiom='universal'`、`platform='ios'`、`size='1024x1024'`；Python 逐字比对 `fn in os.listdir(base)` → `exact_match: True`（目录仅 `AppIcon-1024.png` + `Contents.json`，**无大小写/扩展名漂移**）。`platform:ios` + `universal` + 单 1024 即 Xcode 14+ 起的单尺寸 App Icon 格式，Xcode 26 适用 |
+| B3 | 根 catalog `Assets.xcassets/Contents.json` 合法 | **PASS** | `{"info":{"author":"xcode","version":1}}`，`json.load` 通过 |
+| B4 | `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` 存在于 app target 的 **Debug 与 Release 两份**；`membershipExceptions` **只**排除 `Resources/Info.plist` 与 `Resources/CampusRunSimulator.entitlements` | **PASS** | Debug `project.pbxproj:403`、Release `:440`，两处均有 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;`。app target 的例外集 `:57-63`：`membershipExceptions = ( "Resources/Info.plist", "Resources/CampusRunSimulator.entitlements", )` —— **`Assets.xcassets` 未被排除**（这是关键判定，若被排除则图标仍会缺失，本项通过）；另两个测试 target 的例外集为空 `:67-69`、`:73-75`，不影响 |
+| B5 | 三条件同时成立时 actool **应**产出 `Assets.car` | **PASS（静态推断，无法实测）** | 推理链：① `Assets.xcassets` 位于 `PBXFileSystemSynchronizedRootGroup`（`CampusRunSimulator` 文件夹，`:80-84`）内，Xcode 16+ 同步组按文件类型自动归入相应 build phase，`.xcassets` → Resources；② 该资产目录**未**出现在 `membershipExceptions`（B4 已证），故参与 app target 编译；③ `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` 在 Debug/Release 均设置（B4 已证），actool 会为该 set 生成 app icon 资产并写入 `Assets.car`，且把 `CFBundleIcons` / `CFBundlePrimaryIcon` 注入处理后的 Info.plist；④ set 内已有合法 1024 PNG 且 `Contents.json` 指名（B1/B2 已证），无「空 set」退化。⑤ `Resources` build phase 的 `files = ()`（`:281-287`）是同步组工程的正常形态，**不是缺资源**的证据。→ **推定为修复成立**，最终须真机/`unzip -l` 验证（见 §9.6） |
+| B6 | 其他可能导致图标空白的隐患 | **PASS（未发现新增隐患）** | ① `GENERATE_INFOPLIST_FILE = NO`（app Debug `:414` / Release `:450`）+ 显式 `INFOPLIST_FILE = "CampusRunSimulator/Resources/Info.plist"`（`:415` / `:451`）—— 两者自洽，不会产生双份/覆盖 Info.plist；测试 target 的 `GENERATE_INFOPLIST_FILE = YES`（`:484/518/553/585`）属正常。② 全仓 `grep CFBundleIcons\|CFBundleIcon` **零命中** → 无手写键与 actool 注入冲突。③ `ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS` **未显式设置**（无 `ASSETCATALOG_COMPILER` 于 `:403/:440` 之外），走 Xcode 默认值，仅影响生成 `ImageResource` 符号，与图标渲染无关。④ IPA 由 `ci/scripts/build_unsigned_ipa.sh` 以 `-configuration Release … clean archive`（`:18`、`:76-90`）产出，archive 路径确保 actool 参与，不是手工拼 `.app` 绕过资源编译 |
+
+---
+
+### 9.3 回归项 R-C：版本编排一致性（不阻断）
+
+| # | 断言 | 结论 | 证据 |
+| --- | --- | --- | --- |
+| C1 | xcconfig / pbxproj（6+6）/ workflow 三处同指 **0.1.1 / build 2**，配置层无残留 `0.1.0` | **PASS** | `Config/App.xcconfig:` `MARKETING_VERSION = 0.1.1`、`CURRENT_PROJECT_VERSION = 2`；`project.pbxproj` 6× `MARKETING_VERSION = 0.1.1`（`:421/457/491/525/560/592`）+ 6× `CURRENT_PROJECT_VERSION = 2`（`:408/445/480/516/549/583`）；workflow 无版本字面量，仅注释提及 v0.1.1（`:17`、`:516`）。全仓 `grep 0.1.0` 在配置/CI 文件中**零命中**；`CHANGELOG.md` / `README.md` 中的 `0.1.0` 全部为**历史 run 的如实记录**（`README.md:56` 明确写「上表是 `v0.1.0` 那次 run 的历史实测结果，不代表 v0.1.1 已发布」），不构成编排不一致 |
+| C2 | 实跑 awk 表达式输出 `0.1.1` | **PASS（真跑）** | `awk -F'=' '/^MARKETING_VERSION/{gsub(/[ \t]/,"",$2);print $2}' Config/App.xcconfig` → 输出 `0.1.1`（单行，无前后空白）。workflow 两处调用方式一致：`:162`（build-test）、`:548`（auto-tag） |
+| C3 | auto-tag 幂等逻辑；`created=true` 时 release 能否被拉起；`tag_name`/`name`/`target_commitish` 指向本次 commit | **PASS（静态推断）** | ① 幂等分支：tag 不存在 → `git tag "${TAG}" "${GITHUB_SHA}"` + push + `created=true`（`:560-563`）；已存在 → `created=false` + `exit 0`（`:553-557`），不移动 tag。② `release.if` = `always() && needs.build-test.result == 'success' && (startsWith(github.ref,'refs/tags/v') || (github.ref == 'refs/heads/main' && needs.auto-tag.outputs.created == 'true'))`（`:572-576`）→ `created='true'` 时第二分支为真，**job 会被拉起**；`always()` 是必需的，否则 `needs` 中 auto-tag 被 skip 时会连带跳过 release。③ `tag_name` `:649` 与 `name` `:651` 均为 `startsWith(github.ref,'refs/tags/v') && github.ref_name \|\| needs.auto-tag.outputs.tag` —— tag 触发取 `ref_name`，main 触发取 auto-tag 输出（避免写出 "main"），job 级 `RELEASE_TAG` `:583` 同式。④ `target_commitish: ${{ github.sha }}`（`:650`）与 auto-tag 建 tag 时用的 `${GITHUB_SHA}`（`:560`）**同一 commit**，一致 |
+| C4 | workflow YAML 合法；4 job 依赖成立；auto-tag 被 skip 时 release 仍可因 tag push 触发 | **PASS** | `yaml.safe_load` 通过，jobs = `build-test / signed-ipa / auto-tag / release`；`needs`：`auto-tag: [build-test]`、`release: [build-test, auto-tag]`、`signed-ipa: []`（与路径 A 互斥靠 `if`）。tag push 场景：`build-test.if` 为真（`:74`）→ 运行；`auto-tag.if` 因 `github.ref == 'refs/heads/main'` 为假 → skip；`release.if` 因 `always()` + `startsWith(ref,'refs/tags/v')` 为真 → **正常运行**（skip 的 `needs` 不阻断 `always()`）；此时 `needs.auto-tag.outputs.tag` 为空但三元表达式走 `ref_name` 分支，不读空值。`permissions: contents: write`（`:56-57` 及 `:530-531`、`:578-579`）满足 push tag 与建 Release 的最小权限 |
+
+---
+
+### 9.4 回归项 R-D：无回归
+
+| # | 断言 | 结论 | 证据 |
+| --- | --- | --- | --- |
+| D1 | 交付文件 76 个（含 `.gitignore`，不含 `.git/` 与 `docs/`），无空文件 | **PASS** | `find . -type f -not -path './.git/*' -not -path './docs/*' \| wc -l` → **76**；`find … -empty` → **0 命中** |
+| D2 | 全仓无 `TODO` / `FIXME` / `fatalError()` / 空 Button action | **PASS** | `grep -rn "TODO\|FIXME\|fatalError("`（`*.swift/*.yml/*.sh`，排除 `docs/`）→ 无命中；`grep -rnE "Button\s*\{\s*\}"` → 无空 Button |
+| D3 | `git diff` 范围仅 8 个预期文件；**无**引擎 / 协议 / Domain / 测试文件误改 | **PASS** | `git show --name-status HEAD` 精确 8 项：`M .github/workflows/ios-build.yml`、`M CHANGELOG.md`、`M project.pbxproj`、`A …/AppIcon-1024.png`、`M …/AppIcon.appiconset/Contents.json`、`M RootView.swift`、`M Config/App.xcconfig`、`M README.md`。`CampusRunSimulator/Modules/**`（含 SimulationEngine / Rules / LocationAndSensors）、`Contracts/**`、`Models/Domain/**`、`CampusRunSimulatorTests/**`、`CampusRunSimulatorUITests/**` **均未出现在变更列表** → 零误改 |
+| D4 | pbxproj 改动**只涉及版本数值**；无悬空引用 / 结构破坏；ID 集合与上一版一致 | **PASS** | `git diff HEAD~1 -- project.pbxproj` 仅 **12 行**数值变更（6× `CURRENT_PROJECT_VERSION 1→2`、6× `MARKETING_VERSION 0.1.0→0.1.1`），无增删行、无键名变动。Python 提取 24 位 ID：`cur=41 / old=41`，**added=[]、removed=[]**；`rootObject=1A0000000000000000000001` 存在；花括号 `60/60`、圆括号 `71/71` 平衡 |
+| D5 | `RootView.swift` 括号平衡、`#if` 配对 | **PASS** | `{}` `73/73`、`()` `160/160`、`[]` `10/10` 均平衡；`#if` = `#endif` = **0**（该文件无条件编译段，无配对风险）。另：`:184` 使用双参数 `onChange(of:)` 闭包，需 iOS 17+，与本仓库 `IPHONEOS_DEPLOYMENT_TARGET = 17.0`（`pbxproj:358/386/416/452…`）相容，且 `:179` 早在 v0.1.0 已用同款双参数写法，非新增编译风险 |
+| D6 | 合规红线未被削弱 | **PASS** | `HealthKitService.swift:107` `guard session.dataOrigin == .real else {` **保留**（另有 `:120` 逐点 `allSatisfy { $0.dataOrigin == .real }` 二次守卫）；`RuleEvaluator.swift:97` `guard session.dataOrigin == .simulated else {` **保留**（另有 `:105` 预设守卫、`:131` 过滤）。网络栈扫描 `URLSession\|URLRequest\|uploadTask\|dataTask(\|NSURLConnection`（`CampusRunSimulator/**.swift`）→ **零命中**；`simulated→real` 转换函数扫描 `func (toReal\|convertToReal\|makeReal\|promoteToReal)()\|\.toReal\(` → **零命中** |
+
+---
+
+### 9.5 结论：本次修复是否真正解决两个用户可见缺陷
+
+| 缺陷 | 结论 | 依据强度 |
+| --- | --- | --- |
+| **U1 合规声明关不掉** | **是，治本**（静态层面证据充分） | 强。根因链（旧版 `showComplianceSheet` 只有 `= true` 没有 `= false` + `interactiveDismissDisabled(true)` 封死手势）与现象完全对应；本次在两处补齐 `= false`（`:187`、`:194`），且 `onConfirm` 为无默认值的 `let`，编译器保证不会漏传（A1）。**唯一无法在本环境证明的是「真机点击后 sheet 确实动画收起」**，属运行时行为 |
+| **U2 桌面图标空白** | **是，治本（高档位推定，非实测）** | 中强。根因链（`Contents.json` 无 `filename` + set 内无 PNG → 空 App Icon set → actool 不产出图标资产 → 桌面空白）与现象对应；本次补齐合法 1024 PNG（RGB/无 alpha/130,275 B）+ `filename` 精确匹配 + `APPICON_NAME` 双配置齐备 + 资产目录未被 `membershipExceptions` 排除（B4 关键项）。**但 `Assets.car` 是否真的进了 IPA、图标在真机桌面是否真的显示，本环境无法验证**（无 actool / 无 iOS 设备） |
+
+**明确无法验证的部分（如实标注）**：
+
+1. Swift 代码未编译 → `RootView.swift` 修改后是否存在语法/类型错误，**只能靠人工审读 + 括号平衡 + 既有同构写法前例推断**，不能替代 `xcodebuild`。
+2. `Assets.car` 是否存在、`CFBundleIcons` 是否注入处理后的 Info.plist → 需 `unzip -l` IPA 或真机验证。
+3. 真机上合规页点击后是否真的关闭、桌面图标是否真的出现、图标在深/浅色壁纸下的可读性 → 需真机。
+4. 测试通过率：`N/A（本环境未执行）`。CI run 结果由主理人核验，本节不作预测。
+
+---
+
+### 9.6 本轮新增风险清单（均**不阻断**，建议下轮处理）
+
+| 编号 | 级别 | 文件:行 | 问题 | 建议 |
+| --- | --- | --- | --- | --- |
+| R9-1 | 中（UX） | `CampusRunSimulator/RootView.swift:108` + `:215-221` | 顶栏「合规详情」是**只读**入口，但 `ComplianceConfirmationView` 恒带 `.interactiveDismissDisabled(true)` 且**没有「关闭」按钮**。已确认用户再次打开后，唯一出路是再点一次「我已阅读并确认」，语义上像「重复确认」 | 已确认时传入如 `isEditable: false`，改为 `.interactiveDismissDisabled(false)` 并追加「关闭」按钮；或 `.interactiveDismissDisabled(!isConfirmed)` |
+| R9-2 | 中（可观测性） | `ci/scripts/build_unsigned_ipa.sh:128` | IPA 门禁只校验 `Payload/CampusRunSimulator.app/Info.plist`，**不校验 `Assets.car` / 图标资产**。本次 U2 这类回归无法被流水线自动拦住，只能靠用户反馈发现 | 追加 `unzip -l "${IPA_PATH}" \| grep -q 'Payload/CampusRunSimulator.app/Assets.car'`，并加 `plutil -extract CFBundleIcons xml1 -o - …/Info.plist` 断言 |
+| R9-3 | 低（测试覆盖） | `CampusRunSimulatorUITests/ComplianceMarkingUITests.swift:32-34` | 「点击后能关闭」目前**只有 XCUITest 兜底**，而 XCUITest 仅在 `workflow_dispatch && inputs.runUITests` 时运行（`ios-build.yml:236`），push/PR 默认路径**不跑**。若将来有人删掉 `RootView.swift:92` 的 `onConfirm()`，单元测试层无任何断言可拦 | ①把「sheet 关闭」抽象为可单测的纯状态机（如 `ComplianceGate.reduce(state:event:)`）；②或在 push 路径把 UI 测试纳入（成本高，可选） |
+| R9-4 | 低（文档） | `README.md:45-46`、`:373`、`:387-388` | §0 实测表仍全部是 `v0.1.0` 的历史数据，且已明确标注「不代表 v0.1.1 已发布」（诚实性 OK），但 v0.1.1 发布后需补一行，否则读者易误读 | CI 通过 + Release 发布后补 `v0.1.1 (build 2)` 行与新的 IPA 字节数 |
+
+**阻断项数量：0。**
+
+---
+
+### 9.7 QA 路由
+
+```
+QA_ROUTE: NoOne
+```
+
+第 3 轮为真机反馈驱动的定向 BugFix 回归，不受 SOP「2 轮上限」约束，但结论明确：**R-A / R-B / R-C / R-D 全部 PASS，阻断项 0 条**。两个 P0 缺陷在静态层面均已「治本」（非规避），无需再回退给工程师。
+
+唯一遗留是「运行时行为未经本环境执行」这一客观边界 —— 该部分归入 §9.8 真机待验证清单，由主理人结合 CI 结论与用户真机复测收口，**不构成代码层阻断**。
+
+---
+
+### 9.8 真机待验证清单（本环境一律未执行）
+
+| # | 待验证项 | 判定方法 | 优先级 |
+| --- | --- | --- | --- |
+| V1 | 全新安装（清空 App 数据 / 首装）后，合规确认页点「我已阅读并确认」**确实关闭**并进入首页 | 手动点击；观察 sheet 是否收起、首页是否可交互 | **P0** |
+| V2 | 杀进程重启 App，**不再重复弹出**合规页（`@AppStorage` 已落盘） | 连续冷启动 ≥3 次 | **P0** |
+| V3 | 点顶栏「合规详情」可**再次打开并再次关闭**（验证 A9 的 `onConfirm` 唯一路径） | 反复开关 ≥3 次 | **P0** |
+| V4 | IPA 内存在 `Payload/CampusRunSimulator.app/Assets.car` | `unzip -l xxx.ipa \| grep Assets.car` | **P0** |
+| V5 | 处理后 Info.plist 含 `CFBundleIcons` → `CFBundlePrimaryIcon` → `CFBundleIconFiles` | `plutil -extract CFBundleIcons xml1 -o - Payload/…/Info.plist` | **P0** |
+| V6 | 桌面**出现图标**（非默认白板 / 非空白） | 真机桌面目视 | **P0** |
+| V7 | 图标在**深色**与**浅色**壁纸下的可读性（边缘是否糊、主图形是否被裁） | 切换壁纸目视；iOS 会加圆角遮罩，注意四角留白 | 中 |
+| V8 | 设置页「关于」显示版本 `0.1.1 (2)`（版本编排在真机侧的体现） | 系统设置 → App 详情，或 App 内关于页 | 中 |
+| V9 | 复测合规页**不会**因下滑手势误关（`interactiveDismissDisabled(true)` 生效） | 在合规页上滑关闭 | 低 |
+
+---
+
+### 9.9 本轮实际执行过的命令 / 脚本清单（C31–C42）
+
+| 编号 | 命令 / 脚本 | 用途 |
+| --- | --- | --- |
+| C31 | `ls -la`；`find . -type f -not -path './.git/*' -not -path './docs/*' \| wc -l` | 仓库结构 / 交付文件计数 = 76 |
+| C32 | `git log --oneline -8`；`git status --short`；`git diff --stat HEAD~1` | 变更范围初筛（8 文件） |
+| C33 | Read `CampusRunSimulator/RootView.swift`（全文 368 行）；`git diff HEAD~1 -- CampusRunSimulator/RootView.swift` | R-A 逐项行号取证 + 修复前后对照 |
+| C34 | `ls -la …/AppIcon.appiconset/`；`cat …/AppIcon.appiconset/Contents.json`；`cat …/Assets.xcassets/Contents.json` | R-B 资源存在性与元数据 |
+| C35 | `python3 -c "from PIL import Image …"`（size/mode/alpha extrema/is_square）；`file AppIcon-1024.png`；`shasum -a 256` | R-B1 PNG 实测（1024×1024 / RGB / 无 alpha / 130,275 B） |
+| C36 | `python3`：`json.load` ×2 + `fn in os.listdir(base)` 逐字比对 | R-B2/B3 JSON 合法性 + 文件名精确一致 |
+| C37 | `grep -n "DEPLOYMENT_TARGET\|ASSETCATALOG\|APPICON\|GENERATE_INFOPLIST\|INFOPLIST_FILE\|membershipExceptions\|PBXFileSystemSynchronizedRootGroup" -A2 project.pbxproj` | R-B4/B6 + 部署目标 17.0 |
+| C38 | `awk -F'=' '/^MARKETING_VERSION/{gsub(/[ \t]/,"",$2);print $2}' Config/App.xcconfig`（**真跑** → `0.1.1`）；`grep -n "MARKETING_VERSION\|CURRENT_PROJECT_VERSION" project.pbxproj`（6+6）；`grep -rn "0\.1\.0"` | R-C1/C2 版本编排一致性 |
+| C39 | Read `.github/workflows/ios-build.yml`（全文 670 行）+ `python3 -c "import yaml; yaml.safe_load(…)"`（输出 jobs / needs / if / 三元表达式）；`which actionlint`（不存在） | R-C3/C4 YAML 合法性 + 依赖图 + `release.if` 求值分析 |
+| C40 | `find … -empty`；`grep -rn "TODO\|FIXME\|fatalError("`；`grep -rnE "Button\s*\{\s*\}"` | R-D1/D2 |
+| C41 | `git show --stat --name-status --oneline HEAD`；Python：24 位 ID 集合差（`cur=41 / old=41`，added/removed 均空）+ `rootObject` 提取 + `{}`/`()` 计数 | R-D3/D4 改动范围 + pbxproj 结构完整性 |
+| C42 | Python：`RootView.swift` 括号 `{}`/`()`/`[]` 计数 + `#if`/`#endif` 计数；`grep -n "guard session.dataOrigin"`；`grep -RInE 'URLSession\|URLRequest\|uploadTask\|dataTask('`；`grep -RInE 'func (toReal\|convertToReal\|makeReal\|promoteToReal)\|\.toReal\('`；`bash -n ci/scripts/build_unsigned_ipa.sh`；`grep -n "CFBundleIcons\|CFBundleIcon"` | R-D5/D6 括号平衡 + 合规红线 6 项 + 脚本语法 + 无手写图标键 |
+
+---
+
+*第 3 轮（真机反馈 BugFix 回归）结束 · 路由 `NoOne` · R-A/R-B/R-C/R-D 全 PASS · 阻断项 **0** 条 · 新增风险 4 条（R9-1～R9-4，均不阻断）· 测试通过率 `N/A（本环境未执行，无 xcodebuild / actool / 真机）` · 「合规页可关闭」与「桌面图标出现」两项**运行时结论仍须真机复测**（§9.8 V1–V9），本报告仅在静态层面证明修复链路完整、根因被治本*
