@@ -85,36 +85,28 @@ private struct SharedGlassChrome: ViewModifier {
 // MARK: - iOS 26 官方 Liquid Glass 路径
 
 #if compiler(>=6.2)
-/// Apple 官方玻璃容器路径。`@Namespace` 为 `glassEffectID` 提供形变过渡域；
-/// Reduce Motion 下不使用 `glassEffectID`（禁用形变），改由 `.transition(.opacity)` 淡入淡出。
+/// Apple 官方玻璃路径。`.glassEffect` 可独立使用（Apple 官方示例即无 `GlassEffectContainer` 直接调用），
+/// 因此这里直接对内容施加玻璃，不再为每张卡片各包一层 `GlassEffectContainer`。
+///
+/// 关键修复（治本「整体卡死、点不动」）：
+/// 1. **删除 `glassEffectID(role.rawValue, ...)`** —— `role.rawValue` 是固定角色名，全 App 同名元素共用同一 ID，
+///    且各自处于不同容器，SwiftUI 在玻璃「形变/合并」阶段会反复 reconcile 这些重名 ID，导致主线程空转、UI 冻结。
+///    `glassEffectID` 仅用于跨状态形变过渡，本 App 无此需求，移除即消除死循环。
+/// 2. **移除每卡片 `GlassEffectContainer`** —— 避免大量独立采样层与 phantom 命中层叠加拖垮主线程。
+/// 3. **`SharedGlassChrome` 置于 `.glassEffect` 之前** —— 官方要求布局/命中修饰符必须位于玻璃采样之前。
 @available(iOS 26, *)
 private struct GlassEffectPath<Content: View>: View {
-    @Namespace private var glassNamespace
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     let role: GlassRole
     let interactive: Bool
     let content: Content
 
     var body: some View {
         // QA R1：`Glass.interactive(Bool) -> Glass` 作用在 Glass 值上，不存在 View 版 interactive 修饰符。
-        // 先构造局部 Glass 常量，再传给 `.glassEffect(_:in:)`；两个分支都复用该常量，
-        // 并把 interactive 从 View 修饰链彻底移除。`glassEffectID` / `.transition` 逻辑保持不变。
         let glass: Glass = interactive ? .regular.interactive() : .regular
-        GlassEffectContainer(spacing: role.spacing) {
-            if reduceMotion {
-                content
-                    .padding(role.spacing)
-                    .glassEffect(glass, in: Capsule())
-                    .transition(.opacity)
-            } else {
-                content
-                    .padding(role.spacing)
-                    .glassEffect(glass, in: Capsule())
-                    .glassEffectID(role.rawValue, in: glassNamespace)
-            }
-        }
-        .modifier(SharedGlassChrome(role: role, interactive: interactive))
+        content
+            .modifier(SharedGlassChrome(role: role, interactive: interactive))
+            .padding(role.spacing)
+            .glassEffect(glass, in: Capsule())
     }
 }
 #endif
