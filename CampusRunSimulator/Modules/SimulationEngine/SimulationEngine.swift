@@ -119,7 +119,11 @@ public actor DefaultSimulationEngine: SimulationEngine {
     /// ① 基础参数；② 空种子；③ 路线点数；④ 采样点数上限；
     /// ⑤ 速度曲线端点 / 自定义曲线 / 「时长×速度 vs 设定总距离」；
     /// ⑥ 「时长×速度 vs 自由路线长度」。**冲突时明确报错，绝不静默择一**。
-    public func validateParameters(profile: SimulationProfile, route: Route) throws {
+    /// 参数校验（`SimulationEngine` 协议的同步方法，Swift 6.2 严格并发下必须 `nonisolated`）。
+    /// 方法体只依赖入参 `profile` / `route` 与 `SpeedCurveFactory`（enum 静态方法）、
+    /// `PhaseScheduler`（`Sendable` struct）、`AppConstants`（`static let`），**不读写 actor 存储属性**，
+    /// 因此标记 `nonisolated` 不引入数据竞争（QA CI 第 1 轮编译错误 3）。
+    public nonisolated func validateParameters(profile: SimulationProfile, route: Route) throws {
         guard profile.isBasicallyValid else {
             throw AppError.parameterConflict(
                 reason: "仿真配置基础参数非法（采样率 / 目标步频 / 参考步幅 / 阶段 / 自定义曲线）"

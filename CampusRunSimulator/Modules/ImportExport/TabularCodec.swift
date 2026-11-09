@@ -14,18 +14,33 @@ public struct TabularCodec: Sendable {
     private let validator: RuleValidator
 
     /// 非有限浮点（如距离为 0 时配速 `.infinity`）编码为字符串，避免 JSONEncoder 抛错。
+    /// 编 / 解码共用同一组字面量，保证 `.infinity` / `-.infinity` / `.nan` 往返一致。
+    private enum NonConformingFloatLiteral {
+        static let positiveInfinity = "Infinity"
+        static let negativeInfinity = "-Infinity"
+        static let nan = "NaN"
+    }
+
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
-        encoder.nonConformingFloatEncodingStrategy = .convertToString
+        encoder.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: NonConformingFloatLiteral.positiveInfinity,
+            negativeInfinity: NonConformingFloatLiteral.negativeInfinity,
+            nan: NonConformingFloatLiteral.nan
+        )
         return encoder
     }()
 
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        decoder.nonConformingFloatDecodingStrategy = .convertFromString
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: NonConformingFloatLiteral.positiveInfinity,
+            negativeInfinity: NonConformingFloatLiteral.negativeInfinity,
+            nan: NonConformingFloatLiteral.nan
+        )
         return decoder
     }()
 
