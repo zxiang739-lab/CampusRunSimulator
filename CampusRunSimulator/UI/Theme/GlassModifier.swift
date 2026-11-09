@@ -84,16 +84,18 @@ private struct MaterialGlassCard<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
+        // 稳定 API（iOS 15+）：`.background(.regularMaterial, in:)` 把材质垫在内容之下（不参与命中测试），
+        // 描边用 `.overlay` 沿圆角勾勒在内容之上。玻璃永远在底层，绝不拦截触摸。
         content()
             .padding(role.spacing)
-            .background(in: RoundedRectangle(cornerRadius: role.cornerRadius, style: .continuous)) {
+            .background(
+                .regularMaterial,
+                in: RoundedRectangle(cornerRadius: role.cornerRadius, style: .continuous)
+            )
+            .overlay(
                 RoundedRectangle(cornerRadius: role.cornerRadius, style: .continuous)
-                    .fill(.regularMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: role.cornerRadius, style: .continuous)
-                            .strokeBorder(strokeColor, lineWidth: 1)
-                    )
-            }
+                    .strokeBorder(strokeColor, lineWidth: 1)
+            )
             .shadow(
                 color: shadowColor,
                 radius: interactive ? 8 : 6,
