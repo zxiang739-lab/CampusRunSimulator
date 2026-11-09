@@ -79,21 +79,18 @@ public enum AppTheme {
         "第 \(index + 1) 个采样点｜用时 \(Units.formatDuration(elapsed))｜距离 \(Units.formatDistanceKm(distance))"
     }
 
-    // MARK: Liquid Glass 可用性
+    // MARK: 玻璃外观状态
 
-    /// iOS 26 起官方 Liquid Glass 可用；低版本返回 false，界面显示「已启用兼容外观」，
-    /// **不隐藏、不禁用任何功能**（§1.6 / §B.13.3-13）。
+    /// 本 App 统一使用系统材质（`.regularMaterial`）呈现玻璃质感，全版本一致、稳定不掉帧、不拦截触摸。
+    /// 不再区分 iOS 26 官方 API 与低版本回退——两层路径此前在真机引发整体卡死的硬故障，
+    /// 已重构为单一实现（见 `GlassModifier.swift`）。
     public static func isLiquidGlassAvailable() -> Bool {
-        if #available(iOS 26, *) {
-            return true
-        }
-        return false
+        // 系统材质在所有受支持版本（iOS 17+）均可用，统一返回 true 表示「玻璃质感已启用」。
+        true
     }
 
     public static var liquidGlassStatusText: String {
-        isLiquidGlassAvailable()
-            ? "Liquid Glass 官方外观已启用"
-            : AppConstants.liquidGlassFallbackNotice
+        "玻璃质感已启用（系统材质，全版本一致）"
     }
 
     // MARK: 深色 / 动态类型 / Reduce Motion 适配

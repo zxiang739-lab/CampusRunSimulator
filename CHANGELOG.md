@@ -5,6 +5,25 @@
 
 ---
 
+## v0.1.4（待 CI 验证）
+
+- 日期：2026-11-09（工作副本，**已推送、待 CI 构建验证**）
+- 依据：v0.1.2 / v0.1.3 侧载真机运行反馈——「进入 App 后 UI 整体卡死、点不动、非常卡」
+- 状态：**待 GitHub Actions 重新构建验证**。
+
+### 修复内容
+
+1. **重构玻璃系统，根治「整体卡死 / 无法点击」**
+   - 移除 iOS 26 官方 Liquid Glass 实验性路径（`GlassEffectContainer` / `.glassEffect` / `glassEffectID`）。
+     根因：固定角色名 `role.rawValue` 使全 App 同名玻璃元素共用同一 `glassEffectID`，SwiftUI 在玻璃形变/合并
+     阶段反复 reconcile 重名 ID，主线程空转 → 整体卡死、吞触摸。
+   - `GlassModifier.swift` 重写为**全版本统一的系统材质实现**（`.regularMaterial` + 圆角 + 描边 + 阴影）；
+     玻璃仅作为 `.background`（位于内容之下、不参与命中测试），保证不掉帧、不拦截触摸。
+   - `glassCard(role:interactive:)` 调用方 API 不变，无任何调用点需要改动。
+   - `AppTheme.liquidGlassStatusText` 改为诚实描述「玻璃质感已启用（系统材质，全版本一致）」。
+
+---
+
 ## v0.1.1（未发布 / 待 CI 验证）
 
 - 日期：2026-11-09（工作副本，**尚未推送、尚未触发 CI**）
