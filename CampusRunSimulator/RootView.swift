@@ -208,7 +208,7 @@ public struct RootView: View {
                 Menu {
                     ForEach(allRoutes, id: \.self) { route in
                         Button {
-                            route(to: route)
+                            self.route(to: route)
                         } label: {
                             Label(route.title, systemImage: route.symbolName)
                         }
@@ -249,7 +249,7 @@ public struct RootView: View {
         HStack(spacing: AppTheme.Spacing.xs) {
             ForEach(primaryRoutes, id: \.self) { route in
                 Button {
-                    route(to: route)
+                    self.route(to: route)
                 } label: {
                     VStack(spacing: 2) {
                         Image(systemName: route.symbolName)
@@ -267,7 +267,7 @@ public struct RootView: View {
             Menu {
                 ForEach(secondaryRoutes, id: \.self) { route in
                     Button {
-                        route(to: route)
+                        self.route(to: route)
                     } label: {
                         Label(route.title, systemImage: route.symbolName)
                     }

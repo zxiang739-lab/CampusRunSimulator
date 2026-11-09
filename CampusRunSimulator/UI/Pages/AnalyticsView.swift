@@ -319,7 +319,7 @@ public struct AnalyticsView: View {
             }
             .padding(AppTheme.Spacing.lg)
         }
-        .navigationTitle(AppRoute.analytics.title)
+        .navigationTitle(AppRoute.analytics(sessionId: nil).title)
         .task { await vm.load(sessionId: "") }
         .sheet(isPresented: $showReplay) {
             ReplayView(sessionId: vm.sessionId, startElapsed: replayStartElapsed)
