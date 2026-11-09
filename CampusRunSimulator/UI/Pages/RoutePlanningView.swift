@@ -612,6 +612,8 @@ public struct RoutePlanningView: View {
     @State private var newSegmentKind: ElevationSegmentKind = .uphill
     @State private var newSegmentSlope: Double = 3
     @State private var newSegmentLength: Double = 200
+    /// 更多操作折叠区（副本 / 导入导出 / 用于仿真或实跑），默认收起。
+    @State private var showMoreActions: Bool = false
 
     public init() {}
 
@@ -683,8 +685,7 @@ public struct RoutePlanningView: View {
 
     private var mapSection: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-            Text("地图（主要视觉背景）")
-                .font(.caption.weight(.semibold))
+            StepIndicator(steps: ["点地图加点", "看距离", "保存"], current: vm.mapPoints.isEmpty ? 0 : 1)
             RouteMapView(
                 points: vm.mapPoints,
                 cameraPosition: $cameraPosition,
@@ -694,6 +695,7 @@ public struct RoutePlanningView: View {
                 onSelectPoint: { index in vm.selectPoint(index) },
                 onMovePoint: { index, coordinate in vm.movePoint(index, coordinate) }
             )
+            .frame(height: 340)
             if let index = vm.selectedPointIndex {
                 HStack {
                     Text("已选中第 \(index + 1) 个点")
@@ -704,7 +706,12 @@ public struct RoutePlanningView: View {
                         .buttonStyle(.bordered)
                         .accessibilityLabel("删除选中的路线点")
                 }
+            } else {
+                Text("在地图上点一下添加第一个点；长按点位可拖动修改")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
+            PrivacyNote("地图不显示你的实时位置，只绘制你手动添加的点位。")
         }
         .padding(AppTheme.Spacing.md)
         .glassCard(role: .card, interactive: false)
@@ -737,34 +744,69 @@ public struct RoutePlanningView: View {
 
     private var editorControls: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-            Text("编辑与文件")
-                .font(.headline)
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 140), spacing: AppTheme.Spacing.sm)],
-                spacing: AppTheme.Spacing.sm
-            ) {
+            // 主操作只有一个：保存路线。其余编辑动作保持一行小按钮。
+            Button {
+                vm.save()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "square.and.arrow.down.fill")
+                        .font(.headline)
+                    Text("保存这条路线")
+                        .font(.headline)
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.16, green: 0.62, blue: 0.42), Color(red: 0.09, green: 0.48, blue: 0.56)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: AppTheme.CornerRadius.large, style: .continuous)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: AppTheme.CornerRadius.large, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("保存这条路线")
+
+            HStack(spacing: AppTheme.Spacing.sm) {
                 ActionButton(title: "撤销", symbol: "arrow.uturn.backward", isDisabled: !vm.canUndo) { vm.undo() }
                 ActionButton(title: "重做", symbol: "arrow.uturn.forward", isDisabled: !vm.canRedo) { vm.redo() }
-                ActionButton(title: "清空点位", symbol: "trash", style: .destructive) { vm.clearPoints() }
-                ActionButton(title: "保存路线", symbol: "square.and.arrow.down", style: .prominent) { vm.save() }
-                ActionButton(title: "另存副本", symbol: "doc.on.doc") { vm.duplicate() }
-                ActionButton(title: "导入 GPX", symbol: "square.and.arrow.up") { showImporter = true }
-                ActionButton(title: "导出 GPX", symbol: "arrow.up.doc") {
-                    do { shareURL = try vm.exportGPX() } catch { vm.reportError(error) }
-                }
-                ActionButton(title: "用此路线仿真", symbol: "testtube.2") { vm.useForSimulation() }
-                ActionButton(title: "参考此路线实跑", symbol: "figure.run") { vm.useForLiveRun() }
+                ActionButton(title: "清空", symbol: "trash", style: .destructive) { vm.clearPoints() }
             }
-            Picker("导出来源标记", selection: $vm.exportOrigin) {
-                ForEach([DataOrigin.simulated, DataOrigin.real], id: \.self) { origin in
-                    Text(origin.displayText).tag(origin)
+
+            DisclosureGroup(isExpanded: $showMoreActions) {
+                VStack(spacing: AppTheme.Spacing.sm) {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 140), spacing: AppTheme.Spacing.sm)],
+                        spacing: AppTheme.Spacing.sm
+                    ) {
+                        ActionButton(title: "另存副本", symbol: "doc.on.doc") { vm.duplicate() }
+                        ActionButton(title: "导入 GPX", symbol: "square.and.arrow.up") { showImporter = true }
+                        ActionButton(title: "导出 GPX", symbol: "arrow.up.doc") {
+                            do { shareURL = try vm.exportGPX() } catch { vm.reportError(error) }
+                        }
+                        ActionButton(title: "用此路线仿真", symbol: "testtube.2") { vm.useForSimulation() }
+                        ActionButton(title: "参考此路线实跑", symbol: "figure.run") { vm.useForLiveRun() }
+                    }
+                    Picker("导出来源标记", selection: $vm.exportOrigin) {
+                        ForEach([DataOrigin.simulated, DataOrigin.real], id: \.self) { origin in
+                            Text(origin.displayText).tag(origin)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("选择导出文件的来源标记")
+                    Text("导出的仿真路线默认带 SIMULATED 标记；文件仅写入本地临时目录，不上传")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
+                .padding(.top, AppTheme.Spacing.sm)
+            } label: {
+                Text("更多操作（副本 / 导入导出 / 用于仿真或实跑）")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .pickerStyle(.segmented)
-            .accessibilityLabel("选择导出文件的来源标记")
-            Text("导出的仿真路线默认带 SIMULATED 标记；文件仅写入本地临时目录，不上传")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
         .padding(AppTheme.Spacing.md)
         .glassCard(role: .controlBar, interactive: true)

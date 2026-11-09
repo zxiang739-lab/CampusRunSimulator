@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Observation
 import MapKit
+import UIKit
 
 // MARK: - 仿真页视图模型（F55 / §B.6.3）
 
@@ -37,6 +38,21 @@ public final class SimulationViewModel {
     ]
     public var selectedRouteId: String? = nil
     public var selectedPresetIds: Set<String> = []
+
+    // MARK: 快速入口用的只读展示（route 名称与摘要）
+
+    /// 当前选中路线的名称；未选中时返回 nil，由界面回退到「选择路线」。
+    public var selectedRouteName: String? {
+        guard let id = selectedRouteId else { return nil }
+        return routes.first(where: { $0.id == id })?.name
+    }
+
+    /// 当前选中路线的摘要（距离 · 形状），用于快速入口副标题。
+    public var selectedRouteSummary: String {
+        guard let id = selectedRouteId,
+              let route = routes.first(where: { $0.id == id }) else { return "" }
+        return "\(Units.formatDistanceKm(route.totalDistanceM)) · \(route.routeType.localizedDescription)"
+    }
 
     // MARK: 只读状态
 
@@ -517,28 +533,28 @@ public struct SimulationView: View {
     @State private var showEvaluation: Bool = false
     @State private var showAdvanced: Bool = false
     @State private var showPhases: Bool = false
+    /// 详细参数折叠区（v0.1.7 默认收起，一屏只留三个核心滑杆）。
+    @State private var showAdvancedParameters: Bool = false
 
     public init() {}
 
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
-                complianceHeader
-                routeSection
-                modelSection
-                coreParameters
-                phaseSection
-                customCurveSection
-                advancedSection
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+                quickStartCard
                 actionSection
                 invariantSection
                 previewSection
                 navigationSection
+                advancedParameters
                 footer
             }
-            .padding(AppTheme.Spacing.lg)
+            .padding(.horizontal, AppTheme.Spacing.lg)
+            .padding(.vertical, AppTheme.Spacing.md)
         }
-        .navigationTitle(AppRoute.simulation.title)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .navigationTitle("仿真")
+        .navigationBarTitleDisplayMode(.large)
         .task { await vm.load() }
         .sheet(isPresented: $showReplay) {
             if let sessionId = vm.generatedSessionId {
@@ -556,6 +572,256 @@ public struct SimulationView: View {
             }
         }
         .sheet(isPresented: $showEvaluation) { evaluationSheet }
+    }
+
+    // MARK: 三步快速生成（v0.1.7 图形化入口）
+
+    /// 一屏完成「选路线 → 调三个值 → 生成」，其余参数全部收进下方折叠区。
+    private var quickStartCard: some View {
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+            StepIndicator(steps: ["选路线", "定强度", "出数据"], current: vm.routes.isEmpty ? 0 : (vm.previewPoints.isEmpty ? 1 : 2))
+
+            // 第 1 步：路线
+            if vm.routes.isEmpty {
+                Button {
+                    vm.makeSampleRoute()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+                            .font(.title3)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("生成一条示例校园环线")
+                                .font(.subheadline.weight(.semibold))
+                            Text("需要一条闭环路线才能做弧长参数化")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 2)
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title3)
+                    }
+                    .padding(AppTheme.Spacing.md)
+                    .background(
+                        Color.accentColor.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: AppTheme.CornerRadius.medium, style: .continuous)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: AppTheme.CornerRadius.medium, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Menu {
+                    ForEach(vm.routes) { route in
+                        Button {
+                            vm.selectRoute(route)
+                        } label: {
+                            Text("\(route.name) · \(Units.formatDistanceKm(route.totalDistanceM))")
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "map.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(vm.selectedRouteName ?? "选择路线")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                            Text(vm.selectedRouteSummary.isEmpty ? "点按切换路线" : vm.selectedRouteSummary)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 2)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(AppTheme.Spacing.sm)
+                    .background(
+                        Color.primary.opacity(0.05),
+                        in: RoundedRectangle(cornerRadius: AppTheme.CornerRadius.medium, style: .continuous)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: AppTheme.CornerRadius.medium, style: .continuous))
+                }
+                .accessibilityLabel("选择仿真路线")
+            }
+
+            Divider()
+
+            // 第 2 步：三个核心值（滑杆，实时显示派生配速）
+            VStack(alignment: .leading, spacing: 10) {
+                sliderRow(
+                    title: "步频",
+                    value: "\(Int(vm.targetCadenceSpm.rounded())) spm",
+                    binding: Binding(
+                        get: { vm.targetCadenceSpm },
+                        set: { vm.targetCadenceSpm = $0 }
+                    ),
+                    range: 120...200,
+                    step: 1
+                )
+                sliderRow(
+                    title: "步幅",
+                    value: String(format: "%.2f m", vm.referenceStrideLengthM),
+                    binding: Binding(
+                        get: { vm.referenceStrideLengthM },
+                        set: { vm.referenceStrideLengthM = $0 }
+                    ),
+                    range: 0.60...1.80,
+                    step: 0.01
+                )
+
+                HStack(spacing: 10) {
+                    Toggle(isOn: $vm.useDistanceTarget) {
+                        Text("按距离")
+                            .font(.caption)
+                    }
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    Text(vm.useDistanceTarget ? "目标距离" : "总时长")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 2)
+                    Text(vm.useDistanceTarget
+                         ? Units.formatDistanceKm(vm.totalDistanceMeters)
+                         : Units.formatDuration(vm.totalDurationSeconds))
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                }
+                if vm.useDistanceTarget {
+                    Slider(value: $vm.totalDistanceMeters, in: 1_000...21_000, step: 500)
+                        .accessibilityLabel("目标距离")
+                } else {
+                    Slider(value: $vm.totalDurationSeconds, in: 300...7_200, step: 60)
+                        .accessibilityLabel("总时长")
+                }
+            }
+
+            // 派生配速：完全由步频 × 步幅推出，不是独立随机量
+            HStack(spacing: AppTheme.Spacing.sm) {
+                RingProgressView(
+                    progress: derivedSpeedMps / 6.0,
+                    centerValue: derivedPaceText,
+                    centerUnit: "",
+                    caption: "预计配速 /km",
+                    tint: Color(red: 0.38, green: 0.32, blue: 0.78)
+                )
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("配速由步频 × 步幅推出")
+                        .font(.caption.weight(.semibold))
+                    Text("速度 = 步频 ÷ 60 × 步幅，配速 = 1000 ÷ 速度。改上面两个滑杆，这里会立刻变化。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(vm.lastActionMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            // 第 3 步：一键生成
+            Button {
+                Task { await vm.generate() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: vm.isBusy ? "hourglass" : "wand.and.stars")
+                        .font(.headline)
+                    Text(vm.isBusy ? "正在生成…" : "一键生成仿真数据")
+                        .font(.headline)
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.38, green: 0.32, blue: 0.78), Color(red: 0.22, green: 0.48, blue: 0.86)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: AppTheme.CornerRadius.large, style: .continuous)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: AppTheme.CornerRadius.large, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(vm.isBusy || vm.routes.isEmpty)
+
+            PrivacyNote("生成的数据全部标记为 SIMULATED，只存本机，不会写入健康 App，也不代表真实运动。")
+        }
+        .padding(AppTheme.Spacing.md)
+        .glassCard(role: .controlBar, interactive: true)
+    }
+
+    /// 带标题与数值的滑杆行。
+    private func sliderRow(
+        title: String,
+        value: String,
+        binding: Binding<Double>,
+        range: ClosedRange<Double>,
+        step: Double
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 2)
+                Text(value)
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+            }
+            Slider(value: binding, in: range, step: step)
+                .accessibilityLabel(Text(title))
+        }
+    }
+
+    /// 由步频与步幅推出的速度（m/s），与引擎使用的 L = 60·v/c 同一口径。
+    private var derivedSpeedMps: Double {
+        guard vm.referenceStrideLengthM > 0 else { return 0 }
+        return vm.targetCadenceSpm / 60 * vm.referenceStrideLengthM
+    }
+
+    private var derivedPaceSecPerKm: Double {
+        guard derivedSpeedMps > 0 else { return 0 }
+        return 1_000 / derivedSpeedMps
+    }
+
+    /// 环形中心只放 "5'30\"" 这样的短文本（去掉 /km 后缀，后缀放在 caption）。
+    private var derivedPaceText: String {
+        let full = Units.formatPaceMinPerKm(derivedPaceSecPerKm)
+        return full.replacingOccurrences(of: "/km", with: "")
+    }
+
+    /// 高级参数折叠区：保留原有全部真实控件，只是默认收起。
+    private var advancedParameters: some View {
+        DisclosureGroup(isExpanded: $showAdvancedParameters) {
+            VStack(spacing: AppTheme.Spacing.md) {
+                complianceHeader
+                routeSection
+                modelSection
+                coreParameters
+                phaseSection
+                customCurveSection
+                advancedSection
+            }
+            .padding(.top, AppTheme.Spacing.sm)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("详细参数")
+                        .font(.headline)
+                    Text("路线 / 速度模型 / 五阶段 / 海拔误差（默认值即可直接用）")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(AppTheme.Spacing.md)
+        .glassCard(role: .card, interactive: true)
     }
 
     // MARK: 区块

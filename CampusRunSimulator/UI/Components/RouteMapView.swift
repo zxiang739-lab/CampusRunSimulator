@@ -180,7 +180,7 @@ public struct RouteMapView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("地图与路线")
                 .font(.caption2.weight(.semibold))
-            Text("点击新增点 · 长按拖动改点")
+            Text(onAddPoint == nil ? "不显示实时位置" : "点按加点 · 拖动改点")
                 .font(.caption2)
         }
         .padding(.horizontal, 8)

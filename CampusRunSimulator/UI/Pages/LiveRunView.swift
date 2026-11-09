@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Observation
 import MapKit
+import UIKit
 
 // MARK: - 实时运动记录状态（仅本页使用）
 
@@ -70,15 +71,10 @@ public final class LiveRunViewModel {
     public var horizontalAccuracyM: Double { points.last?.horizontalAccuracyM ?? -1 }
     public var mapPoints: [GeoPoint] { points.map(\.geoPoint) }
 
-    public var headAnnotation: [RouteMapAnnotation] {
-        guard let last = points.last else { return [] }
-        return [RouteMapAnnotation(
-            id: "live_head",
-            label: "当前位置",
-            coordinate: last.geoPoint,
-            symbolName: "figure.run.circle.fill"
-        )]
-    }
+    // 隐私要求（v0.1.7）：地图**不再标注「当前位置」**。
+    // 之前会在真实记录页把最新采样点以「当前位置」图钉显示在地图上，等同于在地图界面上暴露实时位置。
+    // 现在只绘制「已经记入本次记录的轨迹折线」，不显示任何表示用户当下的位置标记，
+    // 也不添加 MapKit 的 UserAnnotation / 蓝点。
 
     // MARK: 权限自检
 
@@ -336,6 +332,8 @@ public struct LiveRunView: View {
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var showFinishConfirm: Bool = false
     @State private var showDiscardConfirm: Bool = false
+    /// 权限与说明折叠区（默认收起，首屏直接可见「开始」）。
+    @State private var showPermissionDetails: Bool = false
     @State private var exportFormat: ExportFormat = .gpx
     @State private var shareURL: URL? = nil
 
@@ -343,21 +341,23 @@ public struct LiveRunView: View {
 
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
-                complianceHeader
-                permissionSection
-                gapSection
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+                controlSection
                 metricsSection
                 mapSection
+                gapSection
                 referenceRouteSection
-                controlSection
                 finishSection
                 errorSection
+                permissionDetails
                 footer
             }
-            .padding(AppTheme.Spacing.lg)
+            .padding(.horizontal, AppTheme.Spacing.lg)
+            .padding(.vertical, AppTheme.Spacing.md)
         }
-        .navigationTitle(AppRoute.liveRun.title)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .navigationTitle("真实跑步")
+        .navigationBarTitleDisplayMode(.large)
         .task { await vm.checkPermissions() }
         .onReceive(NotificationCenter.default.publisher(for: .campusRunWillEnterForeground)) { _ in
             Task { await vm.checkPermissions() }
@@ -382,6 +382,33 @@ public struct LiveRunView: View {
                 ShareSheet(items: [shareURL]) { self.shareURL = nil }
             }
         }
+    }
+
+    /// 权限与说明折叠区：默认收起，避免首屏被大段权限文字挡住「开始」按钮。
+    private var permissionDetails: some View {
+        DisclosureGroup(isExpanded: $showPermissionDetails) {
+            VStack(spacing: AppTheme.Spacing.md) {
+                complianceHeader
+                permissionSection
+            }
+            .padding(.top, AppTheme.Spacing.sm)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.shield")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("权限与说明")
+                        .font(.headline)
+                    Text(vm.phase.localizedDescription)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(AppTheme.Spacing.md)
+        .glassCard(role: .card, interactive: true)
     }
 
     // MARK: 区块
@@ -511,14 +538,14 @@ public struct LiveRunView: View {
 
     private var mapSection: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-            Text("实时轨迹（真实 GPS）")
+            Text("已记录轨迹（仅绘制已保存点位，不显示实时位置）")
                 .font(.caption.weight(.semibold))
             RouteMapView(
                 points: vm.mapPoints,
                 cameraPosition: $cameraPosition,
-                annotations: vm.headAnnotation,
                 progress: 1
             )
+            PrivacyNote("地图不显示你的当前位置标记，也不在后台跟随定位；只回放本次已经记录下来的点位。")
             Text("点位不足或精度超限时不会补点；跨段不连线")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -557,48 +584,119 @@ public struct LiveRunView: View {
     }
 
     private var controlSection: some View {
-        VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-            Text("记录控制")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: AppTheme.Spacing.md) {
+            // 计时大数字 + 阶段标签：一眼看清「跑了多久、现在什么状态」
+            HStack(alignment: .firstTextBaseline) {
+                Text(Units.formatDuration(vm.elapsedSeconds))
+                    .font(.system(size: 42, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Spacer(minLength: 4)
+                Text(vm.phase.localizedDescription)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.primary.opacity(0.08), in: Capsule(style: .continuous))
+            }
+
+            Text("累计 \(Units.formatDistanceKm(vm.distanceM)) · 配速 \(Units.formatPaceMinPerKm(vm.instantPaceSecPerKm))")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            // 主操作：整块大按钮，按阶段在「开始 / 暂停 / 继续」间切换
+            Button {
+                primaryAction()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: primarySymbol)
+                        .font(.title3)
+                    Text(primaryTitle)
+                        .font(.headline)
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(
+                    LinearGradient(colors: primaryColors, startPoint: .leading, endPoint: .trailing),
+                    in: RoundedRectangle(cornerRadius: AppTheme.CornerRadius.large, style: .continuous)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: AppTheme.CornerRadius.large, style: .continuous))
+                .opacity(primaryDisabled ? 0.45 : 1)
+            }
+            .buttonStyle(.plain)
+            .disabled(primaryDisabled)
+            .accessibilityLabel(Text(primaryTitle))
+
             HStack(spacing: AppTheme.Spacing.sm) {
                 ActionButton(
-                    title: "开始",
-                    symbol: "record.circle",
-                    style: .prominent,
-                    isDisabled: !vm.canStart || vm.phase == .running || vm.phase == .paused || vm.isBusy
-                ) { Task { await vm.start() } }
-                ActionButton(
-                    title: "暂停",
-                    symbol: "pause.circle",
-                    isDisabled: vm.phase != .running
-                ) { Task { await vm.pause() } }
-                ActionButton(
-                    title: "继续",
-                    symbol: "play.circle",
-                    isDisabled: vm.phase != .paused
-                ) { Task { await vm.resume() } }
-                ActionButton(
-                    title: "结束",
+                    title: "结束并保存",
                     symbol: "stop.circle",
-                    style: .destructive,
+                    style: .bordered,
                     isDisabled: vm.phase != .running && vm.phase != .paused
                 ) { showFinishConfirm = true }
+                ActionButton(
+                    title: "放弃",
+                    symbol: "xmark.circle",
+                    style: .bordered,
+                    isDisabled: vm.phase != .running && vm.phase != .paused
+                ) { showDiscardConfirm = true }
             }
+
             if !vm.canStart {
-                Text("定位未授权时「开始」保持禁用：请先请求授权，这是真实原因而非占位")
+                Text("定位未授权时「开始」保持禁用：展开下方「权限与说明」完成授权，这是真实原因而非占位")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            ActionButton(
-                title: "放弃本次记录（不落盘）",
-                symbol: "xmark.circle",
-                style: .bordered,
-                isDisabled: vm.phase != .running && vm.phase != .paused
-            ) { showDiscardConfirm = true }
             if vm.isBusy { ProgressView("正在写入 REAL 分区…").font(.caption) }
         }
         .padding(AppTheme.Spacing.md)
         .glassCard(role: .controlBar, interactive: true)
+    }
+
+    // MARK: 主按钮派生（按阶段切换，动作全部真实）
+
+    private var primaryTitle: String {
+        switch vm.phase {
+        case .running: return "暂停"
+        case .paused: return "继续记录"
+        case .idle, .finished: return "开始记录"
+        }
+    }
+
+    private var primarySymbol: String {
+        switch vm.phase {
+        case .running: return "pause.fill"
+        case .paused: return "play.fill"
+        case .idle, .finished: return "record.circle"
+        }
+    }
+
+    private var primaryColors: [Color] {
+        switch vm.phase {
+        case .running: return [Color.orange, Color(red: 0.85, green: 0.45, blue: 0.10)]
+        case .paused: return [Color(red: 0.16, green: 0.62, blue: 0.42), Color(red: 0.09, green: 0.48, blue: 0.56)]
+        case .idle, .finished: return [Color(red: 0.16, green: 0.62, blue: 0.42), Color(red: 0.09, green: 0.48, blue: 0.56)]
+        }
+    }
+
+    private var primaryDisabled: Bool {
+        switch vm.phase {
+        case .running, .paused: return vm.isBusy
+        case .idle, .finished: return !vm.canStart || vm.isBusy
+        }
+    }
+
+    private func primaryAction() {
+        switch vm.phase {
+        case .running:
+            Task { await vm.pause() }
+        case .paused:
+            Task { await vm.resume() }
+        case .idle, .finished:
+            Task { await vm.start() }
+        }
     }
 
     private var finishSection: some View {
