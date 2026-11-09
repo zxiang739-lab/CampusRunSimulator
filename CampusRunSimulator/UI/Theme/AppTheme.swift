@@ -301,24 +301,36 @@ public final class AppNavigation {
     }
 }
 
-// MARK: - 全局设置（真实持久化，所有页面即时生效）
+// MARK: - 全局设置（轻量偏好，UserDefaults 持久化，绝不触碰 SwiftData）
 
+/// 设置是轻量显示偏好（单位/外观/动态类型/仿真默认输入），不是运动数据。
+///
+/// **关键根治点**：此前 `init` 同步调用 `AppServices.loadSettings()`，而后者会创建
+/// `ModelContext(stores.container)` 并 `fetch` —— 在 `@MainActor` 的静态初始化阶段触发
+/// SwiftData 同步 IO，与 App 入口的容器构建叠加，直接堵死主线程。
+///
+/// 现改为用 `UserDefaults` + `JSON` 同步读写：耗时在毫秒级、无 IO 阻塞、无 SwiftData 依赖，
+/// 静态初始化瞬间完成。对外接口（`settings` / `reload()` / `update(_:)` / `shared`）完全不变，
+/// 所有页面无需改动。
 @MainActor
 @Observable
 public final class AppSettingsStore {
     public static let shared = AppSettingsStore()
 
-    public private(set) var settings: AppSettings = .default
+    /// UserDefaults 键：存 `AppSettings` 的 JSON Data。
+    private static let storageKey = "campusrun.settings.v1"
+
+    public private(set) var settings: AppSettings
     public private(set) var lastPersistenceError: String? = nil
 
     private init() {
-        settings = AppServices.shared.loadSettings()
+        settings = Self.readFromUserDefaults() ?? .default
         applyRuntimePreferences(settings)
     }
 
-    /// 在双容器注入完成后重新读取真实持久化设置。
+    /// 重新从 UserDefaults 读取（SettingsView 进入时调用）。同步毫秒级，不阻塞。
     public func reload() {
-        settings = AppServices.shared.loadSettings()
+        settings = Self.readFromUserDefaults() ?? .default
         applyRuntimePreferences(settings)
     }
 
@@ -327,17 +339,30 @@ public final class AppSettingsStore {
         let next = transform(settings)
         settings = next
         applyRuntimePreferences(next)
-        do {
-            try AppServices.shared.saveSettings(next)
+        if Self.writeToUserDefaults(next) {
             lastPersistenceError = nil
-        } catch {
+        } else {
             // 写失败时仍保留内存中的新值，由设置页展示明确错误态。
-            lastPersistenceError = error.localizedDescription
+            lastPersistenceError = "设置保存失败（编码异常）"
         }
     }
 
+    // MARK: UserDefaults 编解码
+
+    private static func readFromUserDefaults() -> AppSettings? {
+        guard let data = UserDefaults.standard.data(forKey: storageKey) else { return nil }
+        return try? JSONDecoder().decode(AppSettings.self, from: data)
+    }
+
+    @discardableResult
+    private static func writeToUserDefaults(_ value: AppSettings) -> Bool {
+        guard let data = try? JSONEncoder().encode(value) else { return false }
+        UserDefaults.standard.set(data, forKey: storageKey)
+        return true
+    }
+
     /// 把会即时影响 UI / VM 默认值的偏好同步写入进程可读的偏好域。
-    /// 只有显示偏好和仿真默认输入，不含任何轨迹点，也不触碰真实记录容器。
+    /// 只有显示偏好和仿真默认输入，不含任何轨迹点，也不触碰任何记录容器。
     private func applyRuntimePreferences(_ value: AppSettings) {
         let defaults = UserDefaults.standard
         defaults.set(value.unitSystem.rawValue, forKey: AppPreferenceKey.unitSystem)
@@ -372,12 +397,12 @@ public final class AppServices {
         cachedStores = injected
     }
 
-    public var stores: PersistentStores? {
-        if let cachedStores { return cachedStores }
-        let fallback = try? ModelContainerFactory.makeInMemoryPair()
-        cachedStores = fallback
-        return fallback
-    }
+    /// 只返回 App 入口已注入的真容器；**绝不在此同步创建容器**。
+    ///
+    /// 旧实现会在未注入时调用 `ModelContainerFactory.makeInMemoryPair()` 同步建两个内存容器，
+    /// 一旦被 `@MainActor` 的静态初始化或 body 早期访问，就会再次阻塞主线程。现直接返回 nil，
+    /// 由调用方（页面）呈现「数据尚未就绪」的真实错误态，绝不以阻塞换可用。
+    public var stores: PersistentStores? { cachedStores }
 
     // MARK: 冻结服务
 

@@ -130,38 +130,37 @@ private struct StorageRecoveryView: View {
     }
 }
 
-// MARK: - @main 入口
+// MARK: - @main 入口（重写版：启动阶段绝不在主线程创建 SwiftData 容器）
 
-/// App 入口：注入双 `ModelContainer`，承接生命周期，挂载根视图。
+/// App 入口。
+///
+/// **关键根治点**：`ModelContainer(for:migrationPlan:configurations:)` 会同步打开 SQLite、
+/// 加载 10 个 `@Model` 的 schema 并跑迁移计划，是重量级阻塞操作。此前把它放在 `App.init()`
+/// 里、在主线程执行两次（双容器），再叠加 `AppSettingsStore.init` 里的同步 `loadSettings()`，
+/// 直接把主线程堵死 —— 表现为「进入 App 整体卡死、点不动」。这也是为何 v0.1.0 的合规全屏页
+/// 「关不掉」：底层 RootView 早已卡死，dismiss 永远无法完成。
+///
+/// 现改为：`init()` 不做任何 IO；先显示占位 `ProgressView`；用 `.task` 在**后台线程**创建双容器，
+/// 完成后再切到 `RootView`。主线程全程只做轻量渲染，绝不阻塞。
 @main
 public struct CampusRunSimulatorApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var stores: PersistentStores?
-    @State private var loadError: AppError?
-    @State private var reloadCount: Int = 0
+    @State private var stores: PersistentStores? = nil
+    @State private var loadError: AppError? = nil
+    /// 递增触发重新 bootstrap（存储恢复页的「重试」真实动作）。
+    @State private var attempt: Int = 0
 
     public init() {
-        let result = CampusRunSimulatorApp.loadStores()
-        switch result {
-        case .success(let loaded):
-            _stores = State(initialValue: loaded)
-            _loadError = State(initialValue: nil)
-        case .failure(let error):
-            _stores = State(initialValue: nil)
-            _loadError = State(initialValue: error)
-        }
-        _reloadCount = State(initialValue: 0)
+        // 空实现：不创建任何 ModelContainer、不读磁盘、不碰 SwiftData。
     }
 
     public var body: some Scene {
         WindowGroup {
             #if CAMPUSRUN_TEST_HOST
             // 仅测试编译条件（CI 单元测试步骤传入 CAMPUSRUN_TEST_HOST）：
-            // 快速启动路径，跳过完整 7 页 UI，避免 XCTest 宿主与 runner 连接超时。
-            // archive / IPA 不定义该条件，仍走下方完整 UI 路径；@testable import 不受影响。
+            // 快速启动路径，跳过完整 UI 与数据层，避免 XCTest 宿主连接超时。
             Group {
-                Text("TestHost")
-                    .accessibilityIdentifier("testHost")
+                Text("TestHost").accessibilityIdentifier("testHost")
             }
             #else
             Group {
@@ -170,35 +169,52 @@ public struct CampusRunSimulatorApp: App {
                         // 默认环境注入模拟域容器，供 @Query 使用；真实域容器经自定义 Key 注入。
                         .modelContainer(stores.simulatedStore)
                         .environment(\.persistentStores, stores)
-                } else {
+                } else if let loadError {
                     StorageRecoveryView(
-                        error: loadError ?? .persistenceMigrationFailed,
-                        retry: { reload() }
+                        error: loadError,
+                        retry: {
+                            self.loadError = nil
+                            self.attempt += 1
+                        }
                     )
+                } else {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .controlSize(.large)
+                        Text("正在准备本地数据…")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-            .id(reloadCount)
+            .task(id: attempt) { await bootstrap() }
             #endif
         }
     }
 
-    /// 重试创建双容器（真实动作，不静默吞错）。
-    private func reload() {
-        let result = CampusRunSimulatorApp.loadStores()
+    /// 后台创建双容器；完成后再回主线程赋值。
+    private func bootstrap() async {
+        guard stores == nil, loadError == nil else { return }
+        // 在后台线程执行同步的容器构建，绝不占用主线程。
+        let result = await Task.detached(priority: .userInitiated) {
+            Self.loadStores()
+        }.value
         switch result {
         case .success(let loaded):
+            // 先交给 UI 层服务，再切换视图，保证任何页面 .task 首次访问时容器已就绪。
+            AppServices.shared.configure(loaded)
             stores = loaded
             loadError = nil
         case .failure(let error):
             stores = nil
             loadError = error
         }
-        reloadCount += 1
     }
 
     /// 加载双容器：优先持久化；失败时降级为双独立内存容器；再失败才返回错误。
     /// 降级路径同样保持两个物理独立的 `ModelContainer`，绝不合并两类数据。
-    private static func loadStores() -> Result<PersistentStores, AppError> {
+    /// 说明：本方法为同步阻塞实现，**只允许在后台线程调用**（见 `bootstrap()`）。
+    nonisolated private static func loadStores() -> Result<PersistentStores, AppError> {
         do {
             let stores = try ModelContainerFactory.makePersistent()
             return .success(stores)

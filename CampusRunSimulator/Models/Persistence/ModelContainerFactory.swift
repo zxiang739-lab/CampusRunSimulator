@@ -4,7 +4,7 @@ import SwiftData
 /// 双独立持久化域（§7.8 / AC-C7）。
 /// `simulatedStore` 与 `realStore` 各自拥有独立 store URL、独立 `ModelConfiguration`、独立 id 空间，
 /// **绝不共用一个 `ModelContainer`**；本期不启用 iCloud，避免两类数据同步汇合。
-public struct PersistentStores {
+public struct PersistentStores: @unchecked Sendable {
     public let simulatedStore: ModelContainer
     public let realStore: ModelContainer
     public let simulatedStoreURL: URL?

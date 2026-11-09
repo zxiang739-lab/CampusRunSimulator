@@ -38,14 +38,21 @@ public enum AppRoute: Hashable, Sendable {
     /// 是否为 TabView 的主 tab（其余页面通过 NavigationStack 路由进入）。
     public var isPrimaryTab: Bool {
         switch self {
-        case .home, .routePlanning, .simulation, .liveRun: return true
-        case .analytics, .history, .settings: return false
+        case .home, .routePlanning, .simulation, .liveRun, .settings: return true
+        case .analytics, .history: return false
         }
     }
 }
 
-/// 根视图：自定义玻璃底部栏 + TabView（4 主入口）+ NavigationStack（7 页路由）
-/// + 权限异常横幅。所有玻璃材质均经 F45 唯一入口 `glassCard`。
+/// 根视图（重写版，iOS 26/27 专用）。
+///
+/// **设计原则：极简、稳定、零自绘玻璃。**
+/// - 使用系统标准 `TabView`：iOS 26 会自动为 tab bar 应用原生 Liquid Glass，无需手写任何玻璃代码，
+///   自然不掉帧、不吞触摸。
+/// - 每个 tab 各自一个独立 `NavigationStack`，互不干扰，杜绝跨 tab 的导航栈串扰与重绘风暴。
+/// - 不再有自定义顶部栏 / 底部栏 / `GlassEffectContainer` / `glassEffectID` / `onChange` 驱动的
+///   自定义路由切换——这些曾是「进 App 卡死」表象的来源。
+/// - 7 个页面全部真实可达：5 个主 tab + 首页导航栈内 push「历史 / 数据分析」。
 @MainActor
 public struct RootView: View {
     @Environment(\.persistentStores) private var stores
@@ -53,48 +60,47 @@ public struct RootView: View {
 
     @State private var selection: AppRoute = .home
     @State private var homePath: [AppRoute] = []
-    @State private var showPermissionBanner: Bool = false
     @State private var navigation = AppNavigation.shared
     @State private var settingsStore = AppSettingsStore.shared
+    @State private var showPermissionBanner: Bool = false
 
-    /// 显式初始化全部路由状态，保证首次进入时落在首页且导航栈为空。
-    public init() {
-        _selection = State(initialValue: .home)
-        _homePath = State(initialValue: [])
-        _showPermissionBanner = State(initialValue: false)
-    }
+    public init() {}
 
     public var body: some View {
-        VStack(spacing: 0) {
-            headerBar
-            TabView(selection: $selection) {
-                NavigationStack(path: $homePath) {
-                    HomeView()
-                        .navigationDestination(for: AppRoute.self) { route in
-                            destinationView(route)
-                        }
-                }
-                .tag(AppRoute.home)
-
-                NavigationStack {
-                    RoutePlanningView()
-                }
-                .tag(AppRoute.routePlanning)
-
-                NavigationStack {
-                    SimulationView()
-                }
-                .tag(AppRoute.simulation)
-
-                NavigationStack {
-                    LiveRunView()
-                }
-                .tag(AppRoute.liveRun)
+        TabView(selection: $selection) {
+            NavigationStack(path: $homePath) {
+                HomeView()
+                    .navigationDestination(for: AppRoute.self) { destinationView($0) }
             }
-            .toolbar(.hidden, for: .tabBar)
-            bottomBar
+            .tabItem { Label("首页", systemImage: "house") }
+            .tag(AppRoute.home)
+
+            NavigationStack {
+                RoutePlanningView()
+            }
+            .tabItem { Label("路线", systemImage: "map") }
+            .tag(AppRoute.routePlanning)
+
+            NavigationStack {
+                SimulationView()
+            }
+            .tabItem { Label("模拟", systemImage: "testtube.2") }
+            .tag(AppRoute.simulation)
+
+            NavigationStack {
+                LiveRunView()
+            }
+            .tabItem { Label("实时", systemImage: "figure.run") }
+            .tag(AppRoute.liveRun)
+
+            NavigationStack {
+                SettingsView()
+            }
+            .tabItem { Label("设置", systemImage: "gearshape") }
+            .tag(AppRoute.settings)
         }
         .onAppear {
+            // 容器已由 App 入口在后台创建完毕并注入环境；这里仅把它交给 UI 层服务。
             AppServices.shared.configure(stores)
             settingsStore.reload()
             showPermissionBanner = permissionDegraded
@@ -114,136 +120,45 @@ public struct RootView: View {
             appearance: settingsStore.settings.appearance,
             dynamicTypeOverride: settingsStore.settings.dynamicTypeOverride
         ))
-    }
-
-    /// 顶部常驻 7 页导航菜单 + 权限异常横幅（全部绑定真实动作）。
-    @ViewBuilder
-    private var headerBar: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 10) {
-                Image(systemName: "figure.run")
-                    .accessibilityHidden(true)
-                Text("Campus Run Simulator")
-                    .font(.headline)
-                Spacer(minLength: 4)
-                Menu {
-                    ForEach(allRoutes, id: \.self) { route in
-                        Button {
-                            self.route(to: route)
-                        } label: {
-                            Label(route.title, systemImage: route.symbolName)
-                        }
-                    }
-                } label: {
-                    Label("页面导航", systemImage: "line.3.horizontal")
-                        .labelStyle(.iconOnly)
-                }
-                .accessibilityLabel("打开页面导航菜单")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-
+        .safeAreaInset(edge: .top, spacing: 0) {
             if showPermissionBanner {
-                HStack(spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .accessibilityHidden(true)
-                    Text("定位或运动权限受限，真实记录可能不完整")
-                        .font(.caption)
-                    Spacer(minLength: 4)
-                    Button("前往设置") { openSystemSettings() }
-                        .font(.caption)
-                        .accessibilityLabel("前往系统设置修复权限")
-                    Button("忽略") { showPermissionBanner = false }
-                        .font(.caption)
-                        .accessibilityLabel("忽略权限提示")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.orange.opacity(0.15))
+                permissionBanner
             }
         }
-        .glassCard(role: .controlBar, interactive: true)
     }
 
-    /// 自定义底部栏：完全经 `glassCard` 使用玻璃材质，4 个主入口与「更多」菜单均真实跳转。
-    private var bottomBar: some View {
-        HStack(spacing: AppTheme.Spacing.xs) {
-            ForEach(primaryRoutes, id: \.self) { route in
-                Button {
-                    self.route(to: route)
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: route.symbolName)
-                            .font(.subheadline)
-                        Text(route.title)
-                            .font(.caption2)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 38)
-                }
-                .foregroundStyle(selection == route ? .blue : .primary)
-                .accessibilityLabel("切换到 \(route.title)")
-            }
-            Menu {
-                ForEach(secondaryRoutes, id: \.self) { route in
-                    Button {
-                        self.route(to: route)
-                    } label: {
-                        Label(route.title, systemImage: route.symbolName)
-                    }
-                }
-            } label: {
-                VStack(spacing: 2) {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.subheadline)
-                    Text("更多")
-                        .font(.caption2)
-                }
-                .frame(maxWidth: .infinity, minHeight: 38)
-                .accessibilityLabel("打开更多页面菜单")
-            }
+    /// 权限异常横幅（简洁版，真实动作绑定）。
+    private var permissionBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .accessibilityHidden(true)
+            Text("定位或运动权限受限，真实记录可能不完整")
+                .font(.caption)
+            Spacer(minLength: 4)
+            Button("设置") { AppServices.shared.openSystemSettings() }
+                .font(.caption.bold())
+                .accessibilityLabel("前往系统设置修复权限")
+            Button("忽略") { showPermissionBanner = false }
+                .font(.caption)
+                .accessibilityLabel("忽略权限提示")
         }
-        .padding(.horizontal, AppTheme.Spacing.sm)
-        .padding(.vertical, AppTheme.Spacing.xs)
-        .glassCard(role: .controlBar, interactive: true)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(Color.orange.opacity(0.18))
     }
 
-    /// 7 页路由表（顶部菜单使用，全部为真实可跳转目标）。
-    private var allRoutes: [AppRoute] {
-        [
-            .home,
-            .routePlanning,
-            .simulation,
-            .liveRun,
-            .analytics(sessionId: nil),
-            .history,
-            .settings
-        ]
-    }
-
-    private var primaryRoutes: [AppRoute] {
-        [.home, .routePlanning, .simulation, .liveRun]
-    }
-
-    private var secondaryRoutes: [AppRoute] {
-        [.analytics(sessionId: nil), .history, .settings]
-    }
-
-    /// 路由到指定页面：主 tab 直接切换，其余页面压入首页导航栈。
+    /// 路由到指定页面：主 tab 直接切换；历史 / 数据分析压入首页导航栈。
     public func route(to target: AppRoute) {
         switch target {
-        case .analytics(sessionId: let sessionId):
-            AppNavigation.shared.selectSession(sessionId)
-        case .home, .routePlanning, .simulation, .liveRun, .history, .settings:
-            break
-        }
-        if target.isPrimaryTab {
+        case .home, .routePlanning, .simulation, .liveRun, .settings:
             selection = target
             homePath.removeAll()
-        } else {
+        case .history, .analytics:
             selection = .home
-            homePath.append(target)
+            if homePath.last != target {
+                homePath.append(target)
+            }
         }
     }
 
@@ -266,10 +181,5 @@ public struct RootView: View {
         case .settings:
             SettingsView()
         }
-    }
-
-    /// 打开系统设置（权限修复的真实动作）。
-    private func openSystemSettings() {
-        AppServices.shared.openSystemSettings()
     }
 }
