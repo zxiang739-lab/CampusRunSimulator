@@ -1,0 +1,617 @@
+name: iOS 构建 · 测试 · IPA · Release
+
+# F71 · GitHub Actions 自动编译 / 签名 / Release。
+#
+# 两条签名路径互斥：
+#   路径 A（默认，job build-test）：未签名 IPA，不需要任何证书或 Secrets；
+#   路径 B（可选，job signed-ipa）：仅 workflow_dispatch 选择 signed 且 5 个 Secrets 齐备时运行。
+# Secret 缺失时路径 B 明确跳过并输出原因，绝不回退到未签名产物冒充已签名 IPA。
+#
+# 签名开关注入策略（QA R4）：App.xcconfig 与 pbxproj 8 份 XCBuildConfiguration 把
+# CODE_SIGNING_ALLOWED / CODE_SIGNING_REQUIRED 默认写死为 NO；命令行实参优先级高于
+# xcconfig / pbxproj，因此两条路径各自在 xcodebuild 命令行显式覆盖：
+#   路径 A（clean build / F70 archive）显式 NO；路径 B（archive / exportArchive）显式 YES。
+# 默认关闭不会污染已签名路径，也无需改动工程文件。
+#
+# Release 触发（QA P0 修复）：push main 且 build-test 成功后，auto-tag job 幂等创建轻量
+# tag v0.1.0，并在同一次 run 内由 release job 发布 GitHub Release + 上传真实 IPA；
+# GITHUB_TOKEN 推送的 tag 按 GitHub 官方规定不会触发新的 workflow run（天然防循环）。
+#
+# Runner 说明：使用 macos-15（或更新带 Xcode 16+ 的 image）。iOS 26 官方 Liquid Glass API
+# 需 Xcode 26 编译验证；若 Runner 提供 Xcode 16，F45 的 #if compiler(>=6.2) 会自动走回退路径，
+# 功能等价、不阻断构建。Xcode 版本动态选择最高可用版本，也可用仓库变量 XCODE_VERSION 固定。
+#
+# 诚实边界：本 workflow 只证明「xcodebuild 编译成功 / 单元测试通过 / IPA 真实存在且非空 /
+# Release 成功发布」，不证明 IPA 可安装到真机、不证明签名成功、不证明真机后台 30 min 记录可用。
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      signingMode:
+        description: '签名模式：unsigned=未签名 IPA（路径 A，默认）；signed=已签名 IPA（路径 B，需 5 个 Secrets）'
+        required: true
+        default: 'unsigned'
+        type: choice
+        options:
+          - unsigned
+          - signed
+      runUITests:
+        description: '是否额外运行 XCUITest（仅 iOS Simulator；真机后台 30 min 不在 CI 覆盖）'
+        required: false
+        default: false
+        type: boolean
+      exportMethod:
+        description: '签名路径 B 的导出方式（ad-hoc / app-store / development / enterprise）'
+        required: false
+        default: 'ad-hoc'
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROJECT: CampusRunSimulator.xcodeproj
+  SCHEME: CampusRunSimulator
+  UNSIGNED_IPA: build/CampusRunSimulator-unsigned.ipa
+  ARTIFACT_NAME: CampusRunSimulator-unsigned-ipa
+  DESTINATION: 'platform=iOS Simulator,name=iPhone 16'
+
+jobs:
+  # ===================== 路径 A：默认，未签名 IPA =====================
+  build-test:
+    name: 路径 A · 编译门禁 + 单元测试 + 未签名 IPA
+    # 与路径 B 互斥：手动选择 signed 时跳过；push / PR / tag 默认走路径 A。
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.signingMode != 'signed' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 选择最高可用 Xcode 并输出环境日志
+        env:
+          XCODE_VERSION: ${{ vars.XCODE_VERSION }}
+        run: |
+          set -euo pipefail
+          echo "== Runner 上可用的 Xcode =="
+          ls -d /Applications/Xcode_*.app 2>/dev/null || true
+          XCODE_APP="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)"
+          if [[ -z "${XCODE_APP}" ]]; then
+            echo "错误：Runner 上未找到 Xcode_*.app" >&2
+            exit 1
+          fi
+          if [[ -n "${XCODE_VERSION:-}" ]]; then
+            XCODE_APP="/Applications/Xcode_${XCODE_VERSION}.app"
+            echo "使用仓库变量 XCODE_VERSION=${XCODE_VERSION}"
+          fi
+          sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
+          echo "XCODE_APP=${XCODE_APP}" >> "$GITHUB_ENV"
+          echo "== xcodebuild -version =="
+          xcodebuild -version
+          echo "== xcrun simctl list devices available =="
+          xcrun simctl list devices available
+          echo "== xcodebuild -showsdks =="
+          xcodebuild -showsdks
+
+      - name: plutil -lint 校验全部 plist
+        run: |
+          set -euo pipefail
+          plutil -lint CampusRunSimulator/Resources/Info.plist
+          plutil -lint CampusRunSimulator/Resources/CampusRunSimulator.entitlements
+          plutil -lint ci/ExportOptions.plist
+          echo "Info.plist / entitlements / ExportOptions.plist 均通过 plutil -lint"
+
+      - name: 合规静态检查（无网络上传 / 无来源转换 / 无禁止词 / 无硬编码证书）
+        run: |
+          set -euo pipefail
+          echo "== 1) App 源码不得引入网络上传栈（AC-C4 / AC-C5）=="
+          if grep -RInE 'URLSession|URLRequest|uploadTask|dataTask\(|NSURLConnection' \
+              --include='*.swift' CampusRunSimulator/; then
+            echo "错误：App 源码出现网络栈，疑似上传成绩路径" >&2
+            exit 1
+          fi
+          echo "未发现网络上传栈"
+          echo "== 2) 不得存在 simulated -> real 转换 / 来源赋值实现 =="
+          # `dataOrigin` 是不可变 let；构造时 `self.dataOrigin = .real`（定位 / 运动采样强制 REAL）
+          # 属合法且必要，必须排除；这里只拒绝「把已有来源改写为 real」或提供转换函数的实现。
+          CONVERSION_HITS="$(grep -RInE 'func (toReal|convertToReal|makeReal|promoteToReal|convertOrigin)|\.toReal\(|dataOrigin[[:space:]]*=[[:space:]]*\.real' \
+              --include='*.swift' CampusRunSimulator/ \
+              | grep -v 'self\.dataOrigin = \.real' || true)"
+          if [[ -n "${CONVERSION_HITS}" ]]; then
+            echo "${CONVERSION_HITS}"
+            echo "错误：发现来源转换 / 赋值路径" >&2
+            exit 1
+          fi
+          echo "未发现来源转换路径（已排除初始化器的合法来源强制）"
+          echo "== 3) 不得出现上传成绩 / 过检 / 伪造定位类动作标识 =="
+          if grep -RInE 'uploadScore|submitScore|postScore|bypassAntiCheat|injectLocation|fakeLocation|locationSimulation' \
+              --include='*.swift' CampusRunSimulator/; then
+            echo "错误：发现禁止动作标识" >&2
+            exit 1
+          fi
+          echo "未发现禁止动作标识"
+          echo "== 4) 不得硬编码证书 / 私钥 =="
+          if grep -RInE -- '-----BEGIN (CERTIFICATE|RSA PRIVATE KEY|PRIVATE KEY|EC PRIVATE KEY)-----' \
+              --exclude-dir=.git --exclude-dir=docs \
+              CampusRunSimulator/ ci/ .github/ 2>/dev/null; then
+            echo "错误：发现硬编码证书 / 私钥" >&2
+            exit 1
+          fi
+          echo "未发现硬编码证书 / 私钥"
+          echo "说明：固定免责声明中的「不上传任何成绩」是否定式合规文案，不在上述扫描模式内；"
+          echo "      docs/ 为前期调研与规格文档，不作为运行时代码扫描对象。"
+
+      - name: 解析版本号与 Build Number
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            MARKETING_VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            MARKETING_VERSION="0.1.0"
+          fi
+          CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}"
+          echo "MARKETING_VERSION=${MARKETING_VERSION}" >> "$GITHUB_ENV"
+          echo "CURRENT_PROJECT_VERSION=${CURRENT_PROJECT_VERSION}" >> "$GITHUB_ENV"
+          echo "marketing=${MARKETING_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build=${CURRENT_PROJECT_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "版本：${MARKETING_VERSION} (build ${CURRENT_PROJECT_VERSION})"
+
+      - name: 编译门禁（xcodebuild -sdk iphonesimulator clean build）
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          # 不加 -quiet，保留完整 stdout；tee 一份日志供失败步骤 cat。
+          xcodebuild \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="${MARKETING_VERSION}" \
+            CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION}" \
+            clean build 2>&1 | tee build/xcodebuild_build.log
+
+      - name: 单元测试（F60–F64，纯逻辑 + in-memory SwiftData）
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration Debug \
+            -destination "${DESTINATION}" \
+            -only-testing:CampusRunSimulatorTests \
+            -resultBundlePath build/TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="${MARKETING_VERSION}" \
+            CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION}" \
+            2>&1 | tee build/xcodebuild_test.log
+
+      - name: UI 测试（可选，仅 workflow_dispatch 手动开启）
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.runUITests }}
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration Debug \
+            -destination "${DESTINATION}" \
+            -only-testing:CampusRunSimulatorUITests \
+            -resultBundlePath build/UITestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="${MARKETING_VERSION}" \
+            CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION}" \
+            2>&1 | tee build/xcodebuild_uitest.log
+
+      - name: 构建未签名 IPA（F70，签名路径 A）
+        run: |
+          set -euo pipefail
+          bash ci/scripts/build_unsigned_ipa.sh 2>&1 | tee build/unsigned_ipa.log
+
+      - name: IPA 真实存在且非空门禁 + 内容二次校验
+        run: |
+          set -euo pipefail
+          test -s "${UNSIGNED_IPA}" || { echo "错误：IPA 不存在或为空" >&2; exit 1; }
+          unzip -l "${UNSIGNED_IPA}" | grep 'Payload/CampusRunSimulator.app/Info.plist'
+          ls -lh "${UNSIGNED_IPA}"
+          echo "IPA_SIZE=$(stat -f%z "${UNSIGNED_IPA}")" >> "$GITHUB_ENV"
+
+      - name: 上传未签名 IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.UNSIGNED_IPA }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 构建状态摘要
+        run: |
+          {
+            echo "### 路径 A 构建结果"
+            echo "- 版本：${MARKETING_VERSION} (build ${CURRENT_PROJECT_VERSION})"
+            echo "- Xcode：$(xcodebuild -version | tr '\n' ' ')"
+            echo "- 未签名 IPA：真实存在且非空（${IPA_SIZE} bytes），已通过 unzip -l 校验"
+            echo "- 单元测试：CampusRunSimulatorTests 已执行"
+            echo "- 安装说明：未签名 IPA 无法直接安装到未越狱 iPhone，见 README.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 失败时输出完整日志
+        if: failure()
+        run: |
+          echo "===== xcodebuild build 日志 ====="
+          cat build/xcodebuild_build.log 2>/dev/null || true
+          echo "===== xcodebuild test 日志 ====="
+          cat build/xcodebuild_test.log 2>/dev/null || true
+          echo "===== xcresult 摘要（Xcode 16+ 语法，旧版本忽略）====="
+          xcrun xcresulttool get test-results summary --path build/TestResults.xcresult 2>/dev/null || true
+          ls -laR build/TestResults.xcresult 2>/dev/null || true
+          echo "===== F70 / archive 日志 ====="
+          cat build/unsigned_ipa.log 2>/dev/null || true
+          cat build/xcodebuild_archive.log 2>/dev/null || true
+          echo "===== build 目录 ====="
+          ls -laR build 2>/dev/null || true
+
+  # ===================== 路径 B：可选，已签名 IPA =====================
+  signed-ipa:
+    name: 路径 B · 已签名 IPA（Secrets 驱动，可选）
+    # 与路径 A 互斥：仅手动选择 signed 时运行。
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.signingMode == 'signed' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 检查 5 个 Secrets 是否齐备（缺失则明确跳过，绝不回退冒充已签名产物）
+        id: secrets_check
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in CERTIFICATE_P12_BASE64 CERTIFICATE_PASSWORD PROVISIONING_PROFILE_BASE64 TEAM_ID KEYCHAIN_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("${name}")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "::warning::跳过已签名 IPA：缺少 Secrets ${missing[*]}"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "reason=${missing[*]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "5 个 Secrets 齐备，继续签名路径 B"
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 输出跳过原因（不生成任何 IPA）
+        if: ${{ steps.secrets_check.outputs.ready != 'true' }}
+        run: |
+          {
+            echo "### 签名路径 B 已跳过"
+            echo "原因：缺少 Secrets ${{ steps.secrets_check.outputs.reason }}"
+            echo "本项目不回退到未签名 IPA 冒充已签名产物，也不虚构签名 / 安装成功。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 选择最高可用 Xcode
+        if: ${{ steps.secrets_check.outputs.ready == 'true' }}
+        env:
+          XCODE_VERSION: ${{ vars.XCODE_VERSION }}
+        run: |
+          set -euo pipefail
+          XCODE_APP="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)"
+          if [[ -z "${XCODE_APP}" ]]; then
+            echo "错误：Runner 上未找到 Xcode_*.app" >&2
+            exit 1
+          fi
+          if [[ -n "${XCODE_VERSION:-}" ]]; then
+            XCODE_APP="/Applications/Xcode_${XCODE_VERSION}.app"
+          fi
+          sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
+          xcodebuild -version
+          xcrun simctl list devices available
+
+      - name: 解析版本号与 Build Number
+        if: ${{ steps.secrets_check.outputs.ready == 'true' }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            MARKETING_VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            MARKETING_VERSION="0.1.0"
+          fi
+          echo "MARKETING_VERSION=${MARKETING_VERSION}" >> "$GITHUB_ENV"
+          echo "CURRENT_PROJECT_VERSION=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: 导入 P12 到临时 keychain、安装描述文件、注入 F69 占位符
+        if: ${{ steps.secrets_check.outputs.ready == 'true' }}
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          EXPORT_METHOD: ${{ inputs.exportMethod }}
+        run: |
+          set -euo pipefail
+          # 所有凭证只存在于 runner.temp，绝不写入仓库、绝不 commit。
+          KEYCHAIN_PATH="${RUNNER_TEMP}/campus-run-signing.keychain-db"
+          CERT_PATH="${RUNNER_TEMP}/campus-run-cert.p12"
+          PROFILE_PATH="${RUNNER_TEMP}/campus-run.mobileprovision"
+          PROFILE_PLIST="${RUNNER_TEMP}/campus-run-profile.plist"
+          EXPORT_OPTIONS="${RUNNER_TEMP}/ExportOptions.plist"
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 3600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          echo "${CERTIFICATE_P12_BASE64}" | base64 --decode > "${CERT_PATH}"
+          security import "${CERT_PATH}" -k "${KEYCHAIN_PATH}" \
+            -P "${CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}" >/dev/null
+          security list-keychains -d user -s "${KEYCHAIN_PATH}" \
+            $(security list-keychains -d user | tr -d '"')
+
+          echo "${PROVISIONING_PROFILE_BASE64}" | base64 --decode > "${PROFILE_PATH}"
+          security cms -D -i "${PROFILE_PATH}" > "${PROFILE_PLIST}"
+          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "${PROFILE_PLIST}")"
+          PROFILE_UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "${PROFILE_PLIST}")"
+          PROFILE_DIR="${HOME}/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "${PROFILE_DIR}"
+          cp "${PROFILE_PATH}" "${PROFILE_DIR}/${PROFILE_UUID}.mobileprovision"
+
+          # F69 只含占位符；此处用 PlistBuddy 就地注入（产物仅在 runner.temp）。
+          cp ci/ExportOptions.plist "${EXPORT_OPTIONS}"
+          /usr/libexec/PlistBuddy -c "Set :method ${EXPORT_METHOD:-ad-hoc}" "${EXPORT_OPTIONS}"
+          /usr/libexec/PlistBuddy -c "Set :teamID ${TEAM_ID}" "${EXPORT_OPTIONS}"
+          /usr/libexec/PlistBuddy -c "Set :provisioningProfiles:com.campusrun.simulator ${PROFILE_NAME}" "${EXPORT_OPTIONS}"
+          /usr/libexec/PlistBuddy -c 'Set :signingCertificate Apple Distribution' "${EXPORT_OPTIONS}"
+          plutil -lint "${EXPORT_OPTIONS}"
+
+          echo "KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "$GITHUB_ENV"
+          echo "EXPORT_OPTIONS=${EXPORT_OPTIONS}" >> "$GITHUB_ENV"
+          echo "SIGNED_EXPORT_DIR=build/export" >> "$GITHUB_ENV"
+
+      - name: xcodebuild archive（显式开启签名 CODE_SIGNING_ALLOWED=YES / REQUIRED=YES）
+        if: ${{ steps.secrets_check.outputs.ready == 'true' }}
+        env:
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          # QA R4：命令行实参优先级高于 App.xcconfig / pbxproj 的全局 NO，
+          # 必须显式反向覆盖为 YES，否则 archive 仍无签名，随后 -exportArchive 必然失败。
+          xcodebuild \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/CampusRunSimulator-signed.xcarchive \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="${TEAM_ID}" \
+            MARKETING_VERSION="${MARKETING_VERSION}" \
+            CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION}" \
+            clean archive 2>&1 | tee build/xcodebuild_signed_archive.log
+
+      - name: xcodebuild -exportArchive（注入副本，签名保持 CODE_SIGNING_ALLOWED=YES）
+        if: ${{ steps.secrets_check.outputs.ready == 'true' }}
+        run: |
+          set -euo pipefail
+          # QA R4：与 archive 一致，显式保持 YES，避免任何环节回落到 xcconfig / pbxproj 的全局 NO。
+          xcodebuild -exportArchive \
+            -archivePath build/CampusRunSimulator-signed.xcarchive \
+            -exportPath "${SIGNED_EXPORT_DIR}" \
+            -exportOptionsPlist "${EXPORT_OPTIONS}" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            2>&1 | tee build/xcodebuild_export_archive.log
+
+      - name: 已签名 IPA 真实存在且非空门禁
+        if: ${{ steps.secrets_check.outputs.ready == 'true' }}
+        run: |
+          set -euo pipefail
+          SIGNED_IPA="$(find "${SIGNED_EXPORT_DIR}" -maxdepth 1 -name '*.ipa' -type f | head -1)"
+          if [[ -z "${SIGNED_IPA}" ]] || [[ ! -s "${SIGNED_IPA}" ]]; then
+            echo "错误：已签名 IPA 不存在或为空" >&2
+            ls -laR "${SIGNED_EXPORT_DIR}" >&2 || true
+            exit 1
+          fi
+          echo "SIGNED_IPA=${SIGNED_IPA}" >> "$GITHUB_ENV"
+          ls -lh "${SIGNED_IPA}"
+          unzip -l "${SIGNED_IPA}" | grep 'Payload/CampusRunSimulator.app/Info.plist'
+          echo "说明：本 job 只证明 IPA 文件存在且非空，不宣称已安装到真机、不虚构安装成功。"
+
+      - name: 上传已签名 IPA artifact
+        if: ${{ steps.secrets_check.outputs.ready == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: CampusRunSimulator-signed-ipa
+          path: ${{ env.SIGNED_IPA }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 清理临时凭证（始终执行）
+        if: ${{ always() && steps.secrets_check.outputs.ready == 'true' }}
+        run: |
+          security delete-keychain "${KEYCHAIN_PATH}" 2>/dev/null || true
+          rm -f "${RUNNER_TEMP}/campus-run-cert.p12" \
+                "${RUNNER_TEMP}/campus-run.mobileprovision" \
+                "${RUNNER_TEMP}/campus-run-profile.plist" \
+                "${RUNNER_TEMP}/ExportOptions.plist"
+          echo "临时 keychain / P12 / 描述文件已从 runner.temp 清理"
+
+      - name: 失败时输出完整日志
+        if: failure()
+        run: |
+          echo "===== signed archive 日志 ====="
+          cat build/xcodebuild_signed_archive.log 2>/dev/null || true
+          echo "===== exportArchive 日志 ====="
+          cat build/xcodebuild_export_archive.log 2>/dev/null || true
+          echo "===== build 目录 ====="
+          ls -laR build 2>/dev/null || true
+
+  # ===================== Auto-tag：首次成功构建后创建轻量 tag v0.1.0 =====================
+  # 防循环（QA §4.3 / R5，三重机制）：
+  #   ① 本 job 用默认 GITHUB_TOKEN 推送 tag，按 GitHub 官方规定不会创建新的 workflow run；
+  #   ② auto-tag.if 严格限定 github.ref == refs/heads/main，tag push（refs/tags/*）不会再次进入；
+  #   ③ release job 不推送任何 git 对象、不产生新事件。
+  # 幂等：git rev-parse 检测 v0.1.0 已存在则 created=false，release.if 据此跳过，
+  #       避免每次 push main 都重复发布 / 覆盖同一 Release。
+  # 不引入任何新 Secret：仅使用默认 GITHUB_TOKEN（QA 方案 A′ 的 PAT 方案不采用）。
+  auto-tag:
+    name: 首次成功构建后幂等创建轻量 tag v0.1.0
+    needs: [build-test]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build-test.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.mk.outputs.tag }}
+      created: ${{ steps.mk.outputs.created }}
+    steps:
+      - name: 检出源码（含完整 tag 历史）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: 幂等判断 → 创建并推送轻量 tag
+        id: mk
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "tag=v0.1.0" >> "$GITHUB_OUTPUT"
+          # 幂等：tag 已存在则直接跳过，绝不重复推送 / 移动 tag。
+          if git rev-parse -q --verify "refs/tags/v0.1.0" >/dev/null; then
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::tag v0.1.0 已存在，幂等跳过，不重复发布 Release"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag v0.1.0 "${GITHUB_SHA}"
+          git push origin refs/tags/v0.1.0
+          echo "created=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::已创建并推送轻量 tag v0.1.0 -> ${GITHUB_SHA}"
+
+  # ===================== Release：tag v* 或 main 首次 auto-tag，同一次 run 内闭环 =====================
+  # 两条合法入口：① 人工 / 外部 push 的 v* tag；② 本次 run 内 auto-tag 首次创建成功。
+  # 因 R5（GITHUB_TOKEN 推 tag 不触发二次 run），release 直接挂在 auto-tag 之后，
+  # 用 needs + outputs 传递 tag 名，IPA artifact 由 download-artifact 从同一次 run 获取。
+  release:
+    name: 发布 GitHub Release（tag v* 或 main 首次 auto-tag）
+    needs: [build-test, auto-tag]
+    if: >-
+      ${{ always() &&
+          needs.build-test.result == 'success' &&
+          (startsWith(github.ref, 'refs/tags/v') ||
+           (github.ref == 'refs/heads/main' && needs.auto-tag.outputs.created == 'true')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # 版本常量：tag 触发取 github.ref_name，main 首次构建取 auto-tag 输出；
+      # 供 RELEASE_BODY 生成与状态摘要复用的统一版本标识，避免 main 触发时输出 "main"。
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || needs.auto-tag.outputs.tag }}
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 下载未签名 IPA artifact（同一次 run）
+        uses: actions/download-artifact@v4
+        with:
+          name: CampusRunSimulator-unsigned-ipa
+          path: release-assets
+
+      - name: 校验 IPA 真实存在且非空 + unzip -l 二次校验
+        run: |
+          set -euo pipefail
+          IPA="$(find release-assets -maxdepth 1 -name '*.ipa' -type f | head -1)"
+          test -n "${IPA}" || { echo "错误：未找到 IPA artifact" >&2; exit 1; }
+          test -s "${IPA}" || { echo "错误：IPA 为空" >&2; exit 1; }
+          # 统一产物文件名，供 Release 的 files: 精确引用。
+          if [[ "${IPA}" != "release-assets/CampusRunSimulator-unsigned.ipa" ]]; then
+            cp "${IPA}" release-assets/CampusRunSimulator-unsigned.ipa
+          fi
+          echo "IPA_PATH=release-assets/CampusRunSimulator-unsigned.ipa" >> "$GITHUB_ENV"
+          ls -lh release-assets/CampusRunSimulator-unsigned.ipa
+          unzip -l release-assets/CampusRunSimulator-unsigned.ipa | grep 'Payload/CampusRunSimulator.app/Info.plist'
+
+      - name: 打包源码 zip（排除 .git / build / release-assets）
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          zip -qry release-assets/CampusRunSimulator-source.zip . \
+            -x '.git/*' 'build/*' 'release-assets/*'
+          test -s release-assets/CampusRunSimulator-source.zip
+          ls -lh release-assets/CampusRunSimulator-source.zip
+
+      - name: 生成 Release 说明（CHANGELOG + 版本 + 诚实安装说明）
+        run: |
+          set -euo pipefail
+          {
+            echo "## CampusRunSimulator ${RELEASE_TAG}（build ${GITHUB_RUN_NUMBER}）"
+            echo
+            echo "本 Release 由 GitHub Actions 在 macOS Runner 上实际 archive 后生成；"
+            echo "IPA 已通过 \`test -s\` 与 \`unzip -l Payload/CampusRunSimulator.app/Info.plist\` 双重门禁。"
+            echo
+            echo "### 产物"
+            echo "- \`CampusRunSimulator-unsigned.ipa\`：未签名 IPA（签名路径 A）"
+            echo "- \`CampusRunSimulator-source.zip\`：完整源码"
+            echo
+            echo "### 安装说明（如实）"
+            echo "未签名 IPA **无法直接安装到未越狱 iPhone**。需使用 AltStore / Sideloadly"
+            echo "以个人 Apple ID 重签名，或配置有效开发者证书与描述文件后使用签名路径 B。"
+            echo "本项目不虚构签名成功、不虚构安装成功；签名状态由使用者自行确认。"
+            echo
+            echo "### 合规声明"
+            echo "教学研究 / 个人自用 / 数据分析工具，不作弊；所有仿真数据标记 SIMULATED，"
+            echo "与真实记录物理隔离，不上传任何第三方平台、不写入健康数据。"
+            echo
+            echo "### 变更记录"
+            cat CHANGELOG.md
+          } > release-assets/RELEASE_BODY.md
+          cat release-assets/RELEASE_BODY.md
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || needs.auto-tag.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: CampusRunSimulator ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || needs.auto-tag.outputs.tag }} (build ${{ github.run_number }})
+          body_path: release-assets/RELEASE_BODY.md
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: |
+            release-assets/CampusRunSimulator-unsigned.ipa
+            release-assets/CampusRunSimulator-source.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 输出构建状态 / 版本号 / 安装说明
+        run: |
+          {
+            echo "### Release 发布状态"
+            echo "- 版本：${RELEASE_TAG} (build ${GITHUB_RUN_NUMBER})"
+            echo "- tag_name：${RELEASE_TAG}；target_commitish：${GITHUB_SHA}"
+            echo "- IPA：${IPA_PATH}（真实存在且非空，已通过 test -s + unzip -l 双门禁）"
+            echo "- 安装：未签名 IPA 需 AltStore / Sideloadly 重签名，或使用签名路径 B"
+          } >> "$GITHUB_STEP_SUMMARY"

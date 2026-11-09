@@ -1,0 +1,22 @@
+// CampusRunSimulator · 共用构建设置唯一来源（F03）
+// 仅存放全 target 共用的值；Debug/Release 差异写在 project.pbxproj 的 XCBuildConfiguration 内。
+// 合规常量（固定文案、schemaVersion、generator）由 AppConstants 单一来源承载，不在此重复。
+
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
+SUPPORTED_PLATFORMS = iphoneos iphonesimulator
+TARGETED_DEVICE_FAMILY = 1,2
+SDKROOT = iphoneos
+
+SWIFT_VERSION = 5.0
+SWIFT_STRICT_CONCURRENCY = complete
+SWIFT_EMIT_LOC_STRINGS = YES
+CLANG_ENABLE_MODULES = YES
+ENABLE_PREVIEWS = YES
+
+PRODUCT_BUNDLE_IDENTIFIER = com.campusrun.simulator
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+GENERATE_INFOPLIST_FILE = NO
+CODE_SIGNING_ALLOWED = NO
+CODE_SIGNING_REQUIRED = NO

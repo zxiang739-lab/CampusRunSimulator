@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  F66 · 正常 GPX 1.1 基准样例（教学研究 / 个人自用 / 数据分析用测试数据）
+  文件名带 SIMULATED_ 前缀；文件内三重标记齐全：
+    ① 文件名 SIMULATED_  ② 文件内 metadata / extensions / trk/name 含 SIMULATED 与 dataOrigin
+    ③ UI 徽标元数据（badgeText / badgeSymbol / badgeAccessibilityLabel）
+  坐标取杭州某高校周边约 300 m 尺度的闭合环，仅作格式基准，不代表任何真实运动成绩。
+  两个 <trkseg> 用于验证「跨段不连线、不计距」；首尾同点用于验证闭合环。
+-->
+<gpx version="1.1" creator="CampusRunSimulator"
+     xmlns="http://www.topografix.com/GPX/1/1"
+     xmlns:crs="http://www.campusrun.simulator/gpx/ext/1.0">
+  <metadata>
+    <name>SIMULATED / 测试数据 / SIMULATED · 闭合环样例</name>
+    <desc>以下均为示例假设值，非任何平台真实规则，仅供本地模拟研究；本评估不产生、不上传任何成绩。 dataOrigin=SIMULATED isHypothetical=true generator=CampusRunSimulator schemaVersion=1.0</desc>
+    <author>
+      <name>CampusRunSimulator</name>
+    </author>
+  </metadata>
+  <extensions>
+    <crs:dataOrigin>simulated</crs:dataOrigin>
+    <crs:isHypothetical>true</crs:isHypothetical>
+    <crs:disclaimer>以下均为示例假设值，非任何平台真实规则，仅供本地模拟研究；本评估不产生、不上传任何成绩。</crs:disclaimer>
+    <crs:generator>CampusRunSimulator</crs:generator>
+    <crs:schemaVersion>1.0</crs:schemaVersion>
+    <crs:badgeText>测试数据 / SIMULATED</crs:badgeText>
+    <crs:badgeSymbol>testtube.2</crs:badgeSymbol>
+    <crs:badgeAccessibilityLabel>测试数据 SIMULATED</crs:badgeAccessibilityLabel>
+  </extensions>
+  <wpt lat="30.30100" lon="120.08100">
+    <ele>12.5</ele>
+    <name>SIMULATED_起点 / 终点</name>
+  </wpt>
+  <trk>
+    <name>SIMULATED_campus_loop_baseline</name>
+    <desc>测试数据 / SIMULATED；闭合环，两个 trkseg，跨段不连线</desc>
+    <trkseg>
+      <trkpt lat="30.30100" lon="120.08100">
+        <ele>12.5</ele>
+        <time>2026-01-01T08:00:00Z</time>
+        <extensions>
+          <crs:dataOrigin>simulated</crs:dataOrigin>
+          <crs:speedMps>2.60</crs:speedMps>
+          <crs:cadenceSpm>168</crs:cadenceSpm>
+          <crs:strideLengthM>0.9285714286</crs:strideLengthM>
+          <crs:instantPaceSecPerKm>384.6153846154</crs:instantPaceSecPerKm>
+          <crs:cumulativeDistanceM>0</crs:cumulativeDistanceM>
+          <crs:segmentIndex>0</crs:segmentIndex>
+        </extensions>
+      </trkpt>
+      <trkpt lat="30.30180" lon="120.08100">
+        <ele>13.1</ele>
+        <time>2026-01-01T08:00:30Z</time>
+        <extensions>
+          <crs:dataOrigin>simulated</crs:dataOrigin>
+          <crs:speedMps>2.60</crs:speedMps>
+          <crs:cadenceSpm>168</crs:cadenceSpm>
+          <crs:strideLengthM>0.9285714286</crs:strideLengthM>
+          <crs:instantPaceSecPerKm>384.6153846154</crs:instantPaceSecPerKm>
+          <crs:cumulativeDistanceM>78.0</crs:cumulativeDistanceM>
+          <crs:segmentIndex>0</crs:segmentIndex>
+        </extensions>
+      </trkpt>
+      <trkpt lat="30.30260" lon="120.08190">
+        <ele>14.6</ele>
+        <time>2026-01-01T08:01:00Z</time>
+        <extensions>
+          <crs:dataOrigin>simulated</crs:dataOrigin>
+          <crs:speedMps>2.65</crs:speedMps>
+          <crs:cadenceSpm>170</crs:cadenceSpm>
+          <crs:strideLengthM>0.9352941176</crs:strideLengthM>
+          <crs:instantPaceSecPerKm>377.3584905660</crs:instantPaceSecPerKm>
+          <crs:cumulativeDistanceM>157.5</crs:cumulativeDistanceM>
+          <crs:segmentIndex>0</crs:segmentIndex>
+        </extensions>
+      </trkpt>
+      <trkpt lat="30.30260" lon="120.08320">
+        <ele>15.0</ele>
+        <time>2026-01-01T08:01:30Z</time>
+        <extensions>
+          <crs:dataOrigin>simulated</crs:dataOrigin>
+          <crs:speedMps>2.70</crs:speedMps>
+          <crs:cadenceSpm>172</crs:cadenceSpm>
+          <crs:strideLengthM>0.9418604651</crs:strideLengthM>
+          <crs:instantPaceSecPerKm>370.3703703704</crs:instantPaceSecPerKm>
+          <crs:cumulativeDistanceM>238.5</crs:cumulativeDistanceM>
+          <crs:segmentIndex>0</crs:segmentIndex>
+        </extensions>
+      </trkpt>
+    </trkseg>
+    <trkseg>
+      <trkpt lat="30.30260" lon="120.08320">
+        <ele>15.0</ele>
+        <time>2026-01-01T08:02:00Z</time>
+        <extensions>
+          <crs:dataOrigin>simulated</crs:dataOrigin>
+          <crs:speedMps>0</crs:speedMps>
+          <crs:cadenceSpm>0</crs:cadenceSpm>
+          <crs:strideLengthM>0</crs:strideLengthM>
+          <crs:instantPaceSecPerKm>0</crs:instantPaceSecPerKm>
+          <crs:cumulativeDistanceM>238.5</crs:cumulativeDistanceM>
+          <crs:segmentIndex>1</crs:segmentIndex>
+          <crs:qualityFlags>gap</crs:qualityFlags>
+        </extensions>
+      </trkpt>
+      <trkpt lat="30.30180" lon="120.08410">
+        <ele>14.2</ele>
+        <time>2026-01-01T08:02:30Z</time>
+        <extensions>
+          <crs:dataOrigin>simulated</crs:dataOrigin>
+          <crs:speedMps>2.55</crs:speedMps>
+          <crs:cadenceSpm>166</crs:cadenceSpm>
+          <crs:strideLengthM>0.9216867470</crs:strideLengthM>
+          <crs:instantPaceSecPerKm>392.1568627451</crs:instantPaceSecPerKm>
+          <crs:cumulativeDistanceM>330.0</crs:cumulativeDistanceM>
+          <crs:segmentIndex>1</crs:segmentIndex>
+        </extensions>
+      </trkpt>
+      <trkpt lat="30.30100" lon="120.08320">
+        <ele>13.0</ele>
+        <time>2026-01-01T08:03:00Z</time>
+        <extensions>
+          <crs:dataOrigin>simulated</crs:dataOrigin>
+          <crs:speedMps>2.50</crs:speedMps>
+          <crs:cadenceSpm>164</crs:cadenceSpm>
+          <crs:strideLengthM>0.9146341463</crs:strideLengthM>
+          <crs:instantPaceSecPerKm>400.0</crs:instantPaceSecPerKm>
+          <crs:cumulativeDistanceM>417.0</crs:cumulativeDistanceM>
+          <crs:segmentIndex>1</crs:segmentIndex>
+        </extensions>
+      </trkpt>
+      <trkpt lat="30.30100" lon="120.08100">
+        <ele>12.5</ele>
+        <time>2026-01-01T08:03:30Z</time>
+        <extensions>
+          <crs:dataOrigin>simulated</crs:dataOrigin>
+          <crs:speedMps>2.45</crs:speedMps>
+          <crs:cadenceSpm>162</crs:cadenceSpm>
+          <crs:strideLengthM>0.9074074074</crs:strideLengthM>
+          <crs:instantPaceSecPerKm>408.1632653061</crs:instantPaceSecPerKm>
+          <crs:cumulativeDistanceM>500.0</crs:cumulativeDistanceM>
+          <crs:segmentIndex>1</crs:segmentIndex>
+        </extensions>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>

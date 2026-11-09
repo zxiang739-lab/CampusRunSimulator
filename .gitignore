@@ -1,0 +1,42 @@
+# ── Xcode ─────────────────────────────────────────────
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdatad/
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+timeline.xctimeline
+playground.xcworkspace
+*.xcresult
+
+# ── Swift Package Manager ─────────────────────────────
+.build/
+.swiftpm/
+
+# ── CocoaPods / Carthage（本项目不使用，仅防御）───────
+Pods/
+Carthage/Build/
+
+# ── macOS / 编辑器 ────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+
+# ── 本地仿真产物与临时文件 ───────────────────────────
+*.log
+tmp/
+release-assets/

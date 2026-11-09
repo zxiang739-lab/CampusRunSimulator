@@ -1,0 +1,214 @@
+%% Campus Run Simulator · 核心数据结构与接口类图
+%% 抽取自 docs/02-Architecture.md §3.4；本文件为单图，可直接用 Mermaid 渲染。
+%% 全部类型仅列出签名（属性 + 方法声明），不含实现代码。
+%% 合规要点：dataOrigin 为所有记录类实体的强制不可变字段；两类数据独立存储域与 id 空间；
+%%          不存在 simulated → real 转换；HealthKitService.write 首行 guard .real。
+classDiagram
+    direction TB
+
+    class DataOrigin {
+        <<enum>>
+        simulated
+        real
+    }
+    class SimulationEngine {
+        <<protocol>>
+        +generate(profile, route) SimulationResult
+        +preview(profile, route) SimulationFrame[]
+        +validateParameters(profile, route)
+    }
+    class DefaultSimulationEngine {
+        <<actor>>
+        +generate(profile, route) SimulationResult
+        -SeededRandom
+        -SpeedCurve
+        -PhaseScheduler
+        -RouteArcLength
+        -ElevationSampler
+        -TrackPointAssembler
+        -InvariantValidator
+    }
+    class SimulationProfile {
+        <<struct>> dataOrigin=.simulated
+        +seed: UInt64
+        +modelType: SpeedModelType
+        +phases: SimulationPhase[]
+        +sampleRateHz: Double
+        +targetCadenceSpm: Double
+    }
+    class SimulationPhase {
+        <<struct>>
+        +kind: PhaseKind
+        +transitionSeconds
+    }
+    class SimulationFrame {
+        <<struct>> dataOrigin=.simulated
+        +t: TimeInterval
+        +arcLengthM: Double
+        +speedMps: Double
+        +cadenceSpm: Double
+        +altitudeM: Double
+        +strideLengthM: Double
+        +cumulativeSteps: Double
+    }
+    class TrackPoint {
+        <<struct>> dataOrigin 继承 session
+        +timestamp: Date
+        +segmentIndex: Int
+        +qualityFlags: QualityFlag[]
+        +cumulativeDistanceM: Double
+    }
+    class RunSession {
+        <<struct>> dataOrigin 强制不可变 let
+        +id: String
+        +isSimulated: Bool
+        +totalDistanceMeters: Double
+        +avgPaceSecPerKm: Double
+        +originChain: String[]
+    }
+    class Route {
+        <<struct>> 用户自建·无 dataOrigin
+        +routeType: RouteType
+        +elevationSource: ElevationSource
+        +pointAtArcLength(s) RoutePoint
+    }
+    class RulePreset {
+        <<struct>> dataOrigin=.simulated
+        +isHypothetical: Bool 强制true
+        +disclaimer: String
+        +waypoints: WaypointPolicy
+        +validity: RecordValidity
+    }
+    class InvariantValidator {
+        <<struct>> 实现 InvariantValidating
+        +validate(session, points, profile) InvariantReport
+        -checkI1...checkI10
+    }
+    class InvariantReport {
+        <<struct>>
+        +checks: InvariantCheck[]
+        +allPassed: Bool
+    }
+    class LocationProvider {
+        <<protocol>> 仅 REAL
+        +samples: AsyncStream~LocationSample~
+        +start() / pause() / resume() / stop()
+    }
+    class MotionProvider {
+        <<protocol>> 仅 REAL
+        +samples: AsyncStream~MotionSample~
+        +availability() MotionAvailability
+    }
+    class HealthKitService {
+        <<protocol>> 仅 REAL 可写
+        +requestReadAuthorization()
+        +requestShareAuthorization()
+        +write(session, routePoints)
+        +enableBackgroundDelivery()
+    }
+    class LiveRunRecorder {
+        <<actor>>
+        +start(referenceRoute) / pause() / resume()
+        +finish(note, writeToHealthKit) RunSession
+        -TrackFilter 精度门限与分段
+    }
+    class GPXCodec {
+        <<struct>> 实现 GPXCoding
+        +encode(session, points) Data
+        +decode(data) GPXImportResult
+    }
+    class DataMarker {
+        <<struct>>
+        +fileName(origin, format, date) String
+        +metadataBlock(origin) MarkerMetadata
+        +verifyMarkers(data, origin, format)
+    }
+    class ExportManager {
+        <<actor>>
+        +export(session, points, format) ExportedFile
+        -单一来源守卫
+    }
+    class RunRepository {
+        <<protocol>>
+        +save(session, points)
+        +fetch(origin, predicate) RunSession[]
+        +clear(origin)
+        +unclassified() RunSession[]
+        +duplicate(session) RunSession
+    }
+    class DefaultRunRepository {
+        <<actor>>
+        -simulatedStore
+        -realStore
+    }
+    class ModelContainerFactory {
+        <<enum>>
+        +makePersistent() PersistentStores
+        +makeInMemory() ModelContainer
+    }
+    class ReplayController {
+        <<class>> @MainActor
+        +state: ReplayState
+        +play() / pause() / resume() / seek() / setRate()
+        +frame(at) TrackPoint
+    }
+    class RuleEvaluator {
+        <<struct>>
+        +evaluate(session, points, presets) RuleEvaluationResult[]
+        +compare(results) ComparisonTable
+    }
+    class ReplayView {
+        <<View>>
+        +OriginBadge 常驻
+        +ReplayControls 真实控件
+    }
+
+    SimulationEngine <|.. DefaultSimulationEngine
+    DefaultSimulationEngine ..> SimulationProfile : 输入
+    DefaultSimulationEngine ..> Route : 输入
+    DefaultSimulationEngine ..> SeededRandom : 唯一随机入口
+    DefaultSimulationEngine ..> SimulationFrame : 产出主干量
+    DefaultSimulationEngine ..> TrackPointAssembler : 派生量
+    DefaultSimulationEngine ..> InvariantValidator : I1-I10 校验
+    InvariantValidator ..> InvariantReport : 输出
+    InvariantValidator ..> TrackPoint : 校验
+    TrackPointAssembler ..> SimulationFrame : 逐帧
+    TrackPointAssembler ..> TrackPoint : 组装
+    SimulationProfile *-- SimulationPhase : 5 阶段
+    SimulationFrame ..> TrackPoint : 派生
+    RunSession *-- TrackPoint : 拥有
+    RunSession --> DataOrigin : 不可变 let
+    TrackPoint --> DataOrigin : 继承
+    SimulationFrame --> DataOrigin : 恒 simulated
+    RulePreset --> DataOrigin : 恒 simulated
+    RunSession ..> Route : 可引用
+    Route --> DataOrigin : 无（用户自建中立）
+
+    LocationProvider ..> MotionProvider : 并列传感器流
+    LiveRunRecorder ..> LocationProvider : 消费
+    LiveRunRecorder ..> MotionProvider : 消费
+    LiveRunRecorder ..> HealthKitService : 仅显式勾选且 real
+    LiveRunRecorder ..> RunSession : 产出 real
+    HealthKitService ..> RunSession : guard origin == real
+
+    GPXCodec ..> DataMarker : 注入三重标记
+    ExportManager ..> GPXCodec : 调用
+    ExportManager ..> DataMarker : 校验
+    ExportManager ..> RunSession : 单一来源
+    ExportManager ..> ExportRecord : 审计
+
+    RunRepository <|.. DefaultRunRepository
+    DefaultRunRepository ..> ModelContainerFactory : 双容器
+    DefaultRunRepository ..> RunSession : 按 origin 路由
+    RuleEvaluator ..> RulePreset : 用户自建假设
+    RuleEvaluator ..> RunSession : 仅 simulated
+    ReplayController ..> RunRepository : 读取
+    ReplayController ..> TrackPoint : 游标
+    ReplayView ..> ReplayController : 驱动
+    ReplayView ..> DataOrigin : 常驻徽标
+
+    note for RunSession "dataOrigin 无 setter、无转换器；不存在 simulated → real"
+    note for HealthKitService "write 首行 guard .real，否则 AppError.simulatedWriteForbidden"
+    note for SimulationFrame "全部字段由主干量派生；禁止任何字段独立随机 (I9)"
+    note for DataMarker "文件名 SIMULATED_/REAL_ + 文件内 metadata/首行/顶层 + UI 三重标记"
+    note for DefaultRunRepository "两个独立 ModelContainer、独立 id 空间 sim_/real_"

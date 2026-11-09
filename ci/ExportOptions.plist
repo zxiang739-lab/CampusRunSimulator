@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  F69 · 签名路径 B 的 xcodebuild -exportArchive 导出配置。
+
+  合规与诚实声明：
+  - 本文件只含占位值，绝不写入任何真实证书、私钥、Team ID 或描述文件。
+  - ${TEAM_ID} / ${PROVISIONING_PROFILE_NAME} / ${SIGNING_CERTIFICATE_NAME} / ${EXPORT_METHOD}
+    均为占位符；在 GitHub Actions 的 signed-ipa job 中由 Secrets 通过
+    `plutil -replace ...` 就地注入后才会使用，注入产物仅存在于 runner 临时目录，
+    绝不回写仓库、绝不 commit。
+  - 未注入占位符直接调用 -exportArchive 会失败，这是预期行为：
+    本项目不虚构「签名成功」，Secret 缺失时该 job 明确跳过。
+  - 不含已废弃的 compileBitcode 键（Xcode 14 起移除）。
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>${EXPORT_METHOD}</string>
+	<key>teamID</key>
+	<string>${TEAM_ID}</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>${SIGNING_CERTIFICATE_NAME}</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.campusrun.simulator</key>
+		<string>${PROVISIONING_PROFILE_NAME}</string>
+	</dict>
+	<key>destination</key>
+	<string>export</string>
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<key>thinning</key>
+	<string>&lt;none&gt;</string>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>

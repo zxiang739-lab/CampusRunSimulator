@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  F68 · GPX 1.1 容错样例：仅 <wpt> / <rte> / <rtept>，完全没有 <trk>。
+  本文件自身是合法 GPX 1.1（version="1.1"），因此 XMLParser 能真实解析并走到
+  「仅含路线点」兼容分支：解析出 routePoints，points 为空，提示「不作为运动轨迹」，
+  且因文件内无 SIMULATED / REAL 来源标记而隔离为「未分类」，绝不默认真实记录。
+
+  关于「非法 version 段」：单个 XML 文档只能有一个 <gpx> 根元素与一个 version 属性；
+  若把根 version 写成非法值，解析器会在版本校验处直接拒绝，反而测不到「仅 rte」兼容分支。
+  因此本文件在 <extensions> 内保留 <crs:illegalVersionSample>9.9</crs:illegalVersionSample>
+  作为非法版本探针（合法 XML 自定义扩展字段），由 CodecTests.testInvalidVersionRejected()
+  读取该值并内联构造 version="9.9" 的 GPX 数据，断言抛出 AppError.gpxInvalidVersion。
+  这样三个样例均为真实合法 XML，同时 AC-F3 的「仅 rte」「非法版本」两类容错都真实覆盖。
+-->
+<gpx version="1.1" creator="CampusRunSimulator"
+     xmlns="http://www.topografix.com/GPX/1/1"
+     xmlns:crs="http://www.campusrun.simulator/gpx/ext/1.0">
+  <metadata>
+    <name>仅有路线点样例（无来源标记）</name>
+    <desc>用于验证无 trk 时兼容为路线点、不臆造轨迹；非法版本探针见 extensions</desc>
+  </metadata>
+  <extensions>
+    <crs:illegalVersionSample>9.9</crs:illegalVersionSample>
+    <crs:illegalVersionHint>非法 version 由 CodecTests 内联构造验证拒绝，本文件保持合法 GPX 1.1</crs:illegalVersionHint>
+  </extensions>
+  <wpt lat="30.30100" lon="120.08100">
+    <ele>12.5</ele>
+    <name>校园跑起点（示例）</name>
+  </wpt>
+  <wpt lat="30.30260" lon="120.08320">
+    <ele>15.0</ele>
+    <name>折返点（示例）</name>
+  </wpt>
+  <rte>
+    <name>示例往返路线（不是运动轨迹）</name>
+    <rtept lat="30.30100" lon="120.08100">
+      <ele>12.5</ele>
+    </rtept>
+    <rtept lat="30.30180" lon="120.08190">
+      <ele>13.4</ele>
+    </rtept>
+    <rtept lat="30.30260" lon="120.08320">
+      <ele>15.0</ele>
+    </rtept>
+    <rtept lat="30.30180" lon="120.08410">
+      <ele>14.2</ele>
+    </rtept>
+    <rtept lat="30.30100" lon="120.08100">
+      <ele>12.5</ele>
+    </rtept>
+  </rte>
+</gpx>

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  F67 · GPX 1.1 容错样例：全部 <trkpt> 缺 <ele>，部分 <trkpt> 缺 <time>，
+  另含一处时间戳乱序点。合法 XML，但字段不全。
+  验收预期（AC-F3）：不臆造海拔与时间戳 —— 缺 ele 用 0 哨兵并标 lowAccuracy，
+  缺 time / 乱序 time 的点直接跳过且不插值；来源无法判定时隔离为「未分类」，绝不默认 real。
+  坐标取杭州某高校周边约 200 m 尺度，仅作格式基准。
+-->
+<gpx version="1.1" creator="CampusRunSimulator"
+     xmlns="http://www.topografix.com/GPX/1/1"
+     xmlns:crs="http://www.campusrun.simulator/gpx/ext/1.0">
+  <metadata>
+    <name>字段缺失容错样例（无来源标记）</name>
+    <desc>用于验证缺 ele / 缺 time / 时间戳乱序时分级提示且不臆造数据</desc>
+  </metadata>
+  <trk>
+    <name>missing_fields_case</name>
+    <trkseg>
+      <trkpt lat="30.30120" lon="120.08140">
+        <time>2026-01-01T09:00:00Z</time>
+      </trkpt>
+      <trkpt lat="30.30160" lon="120.08140">
+        <time>2026-01-01T09:00:30Z</time>
+      </trkpt>
+      <trkpt lat="30.30200" lon="120.08190">
+        <!-- 故意缺 <time>：该点应被跳过，不臆造时间戳 -->
+      </trkpt>
+      <trkpt lat="30.30240" lon="120.08240">
+        <time>2026-01-01T09:01:00Z</time>
+      </trkpt>
+      <trkpt lat="30.30280" lon="120.08290">
+        <!-- 故意时间戳乱序（早于上一点）：该点应被丢弃，不重排 -->
+        <time>2026-01-01T08:59:00Z</time>
+      </trkpt>
+      <trkpt lat="30.30320" lon="120.08340">
+        <time>2026-01-01T09:01:30Z</time>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>

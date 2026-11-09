@@ -1,0 +1,48 @@
+MIT License
+
+Copyright (c) 2026 CampusRunSimulator Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+附加合规声明（本声明为本许可证的补充条款，与上述 MIT 条款一并适用）
+--------------------------------------------------------------------------------
+
+本软件为「教学研究 / 个人自用 / 数据分析」工具，其仿真功能由 App 内独立数据源生成，
+全部仿真数据必须标记为「测试数据 / SIMULATED」，并与真实运动记录物理隔离。
+
+使用本软件时，不得：
+
+1. 用于任何形式的作弊，包括但不限于把模拟记录冒充真实运动成绩、向任何第三方平台
+   提交伪造的运动数据，或协助他人完成上述行为；
+2. 用于绕过任何第三方平台、学校或应用的监测机制、反作弊机制、身份验证机制、
+   设备指纹校验或服务端校验；
+3. 用于破解、逆向、注入、篡改任何第三方 App，或伪造第三方服务器数据；
+4. 修改系统级定位、向其他 App 注入虚拟定位，或伪装成任何第三方平台的真实定位数据；
+5. 删除、隐藏、弱化本软件内置的来源标记（文件名前缀、文件内标记、界面徽标），
+   或实现任何把测试数据转换为真实记录的转换路径；
+6. 把本软件内置的「示例假设值」当作任何平台或学校的真实规则进行陈述或传播。
+
+本软件不提供、且明确禁止添加：上传成绩接口、成绩分数计算、第三方服务器通信、
+HealthKit 中写入测试数据的路径。任何违反上述条款的修改或分发不在本许可证授权范围内。
+
+使用者应自行确认其使用行为符合所在地区法律法规、所在学校或平台的规定，并自行承担
+因不当使用产生的一切后果。作者与贡献者不对任何滥用行为承担责任。
+
+引用来源与证据分级见 docs/01-Research-and-PRD.md 附录 A / 附录 B。

@@ -1,0 +1,68 @@
+%% Campus Run Simulator · 程序调用流程时序图（主流程抽取副本）
+%% 抽取自 docs/02-Architecture.md §4.1；本文件为单图，可直接用 Mermaid 渲染。
+%%
+%% 其余 3 张时序图（均为独立可渲染的单图）位于：
+%%   §4.2 真实运动记录与后台 / 自动暂停 / 中断恢复
+%%   §4.3 轨迹回放
+%%   §4.4 导出与三重标记 / 合规审计（含混合导出拒绝）
+%%
+%% 合规要点：仿真全流程不触碰 CLLocationManager / HKHealthStore / 网络；
+%%          只构造 CLLocation 值对象；I1–I10 校验失败即拒绝生成。
+sequenceDiagram
+    autonumber
+    actor U as 用户（③ 运动模拟器）
+    participant V as SimulationView<br/>F55
+    participant VM as SimulationViewModel
+    participant E as DefaultSimulationEngine<br/>F31 (actor)
+    participant RNG as SeededRandom<br/>F24
+    participant SC as SpeedCurve + PhaseScheduler<br/>F25/F26
+    participant AR as RouteArcLength<br/>F27
+    participant ES as ElevationSampler<br/>F28
+    participant AS as TrackPointAssembler<br/>F29
+    participant IV as InvariantValidator<br/>F30
+    participant RP as RunRepository<br/>F44
+    participant ST as SimulatedStore<br/>F21 存储域A
+    participant EX as ExportManager<br/>F43
+
+    U->>V: 选择 Route / 6 模型 / 5 阶段 / 种子 / 采样率
+    V->>VM: 绑定参数（页顶常驻 OriginBadge(.simulated)）
+    U->>V: 点击「一致性校验」
+    V->>E: validateParameters(profile, route)
+    alt 时长×速度 与 路线长度冲突 / 点数超上限
+        E-->>VM: throw AppError.parameterConflict / .tooManyPoints
+        VM-->>V: 明确报错 + 可解建议（不生成）
+    else 参数合法
+        E-->>VM: OK
+    end
+    U->>V: 点击「生成并保存」
+    V->>E: generate(profile, route)
+    E->>RNG: init(seed = profile.seed) —— 唯一随机入口
+    loop 每个采样时刻 t_i（Δt = 1/sampleRateHz，默认 1 Hz）
+        E->>SC: v(t_i) + c(t_i)（时间相关有界平滑噪声）
+        E->>AR: s_i = ∫v dt → pointAtArcLength(s_i) + bearing
+        E->>ES: h(s_i) = h0 + 剖面 + 误差模型
+        E->>AS: assemble(t_i, s_i, v_i, c_i, h_i, .simulated)
+        AS-->>E: SimulationFrame（L_i 由 v_i/c_i 反算，累计量推导）
+    end
+    E->>AS: finalize(frames) → RunSession(.simulated) + TrackPoint[]
+    E->>IV: validate(session, points, profile)
+    IV-->>E: InvariantReport（I1–I10 逐项）
+    alt allPassed == false
+        E-->>VM: throw AppError.invariantFailed([InvariantID])
+        VM-->>V: 拒绝生成 + 高亮违规项（页面标记不消失）
+    else 全部通过
+        E-->>VM: SimulationResult(session, points, report)
+        VM->>RP: save(session, points)
+        RP->>RP: 校验 dataOrigin == .simulated 与容器域一致
+        RP->>ST: 批量写入（id 前缀 sim_）
+        ST-->>RP: 完成（中断可恢复）
+        RP-->>VM: 成功
+        VM-->>V: 进入 SIMULATED 分区 / 预览 / 分析 / 回放
+        opt 用户导出
+            V->>EX: export(session, points, .gpx)
+            EX->>EX: 单一来源守卫 + 三重标记注入
+            EX-->>V: SIMULATED_YYYYMMDD_HHMMSS.gpx（含 metadata/desc/extensions）
+            EX->>RP: 写 ExportRecord(markersIncluded)
+        end
+    end
+    Note over E,ST: 全流程不触碰 CLLocationManager / HKHealthStore / 网络；<br/>仿真只构造 CLLocation 值对象（R8 合规基础）
