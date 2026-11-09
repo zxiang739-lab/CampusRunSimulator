@@ -422,7 +422,8 @@ public actor LiveRunRecorder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
-        encoder.nonConformingFloatEncodingStrategy = .convertToString
+        encoder.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: "Infinity", negativeInfinity: "-Infinity", nan: "NaN")
         return try encoder.encode(recoveryCheckpoint())
     }
 
@@ -430,7 +431,8 @@ public actor LiveRunRecorder {
     public func restore(from data: Data) throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        decoder.nonConformingFloatDecodingStrategy = .convertFromString
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: "Infinity", negativeInfinity: "-Infinity", nan: "NaN")
         let checkpoint = try decoder.decode(RecoveryCheckpoint.self, from: data)
         restore(checkpoint)
     }

@@ -215,7 +215,7 @@ public actor DefaultSimulationEngine: SimulationEngine {
         profile: SimulationProfile,
         route: Route
     ) throws -> GenerationBundle {
-        try validateParameters(profile, route: route)
+        try validateParameters(profile: profile, route: route)
         let duration = SpeedCurveFactory.effectiveDuration(profile)
         let deltaT = profile.sampleIntervalSeconds
         let count = Int((duration / deltaT).rounded(.down)) + 1

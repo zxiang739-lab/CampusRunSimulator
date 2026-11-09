@@ -90,7 +90,7 @@ public final class CoreMotionProvider: MotionProvider, @unchecked Sendable {
                     return
                 }
                 self.ingestAltimeter(relativeMeters: data.relativeAltitude.doubleValue,
-                                     timestamp: data.timestamp)
+                                     timestamp: Date(timeIntervalSince1970: data.timestamp))
             }
         }
         if state.activityAvailable {
@@ -135,7 +135,7 @@ public final class CoreMotionProvider: MotionProvider, @unchecked Sendable {
         lock.lock()
         latestPaceMinPerKm = pace
         latestCadenceSpm = cadence
-        latestSteps = data.numberOfSteps?.intValue
+        latestSteps = data.numberOfSteps.intValue
         latestDistanceM = data.distance?.doubleValue
         lock.unlock()
         emit(timestamp: timestamp)

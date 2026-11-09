@@ -139,7 +139,7 @@ public actor DefaultHealthKitService: HealthKitService {
         let configuration = HKWorkoutConfiguration()
         configuration.activityType = .running
         configuration.locationType = .outdoor
-        let builder = HKWorkoutBuilder(healthStore: healthStore, configuration: configuration)
+        let builder = HKWorkoutBuilder(healthStore: healthStore, configuration: configuration, device: nil)
 
         do {
             try await beginCollection(builder, at: session.startTime)
@@ -161,7 +161,7 @@ public actor DefaultHealthKitService: HealthKitService {
             let workout = try await finishWorkout(builder)
 
             // 路线由 HKWorkoutRouteBuilder 单独写入；点位已经过 >50 m / >3 s 过滤。
-            let routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore)
+            let routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore, device: nil)
             try await insert(locations, into: routeBuilder)
             try await finishRoute(routeBuilder, workout: workout)
 
@@ -223,7 +223,7 @@ public actor DefaultHealthKitService: HealthKitService {
 
     private func beginCollection(_ builder: HKWorkoutBuilder, at date: Date) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            builder.beginCollection(at: date) { success, error in
+            builder.beginCollection(withStart: date) { success, error in
                 if let error = error {
                     continuation.resume(throwing: error)
                 } else if !success {
@@ -281,7 +281,7 @@ public actor DefaultHealthKitService: HealthKitService {
 
     private func finishRoute(_ builder: HKWorkoutRouteBuilder, workout: HKWorkout) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            builder.finishRoute(workout: workout, metadata: nil) { _, error in
+            builder.finishRoute(with: workout, metadata: nil) { _, error in
                 if let error = error {
                     continuation.resume(throwing: error)
                 } else {
